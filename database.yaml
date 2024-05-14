@@ -1,0 +1,9 @@
+users:
+  user1:
+    username: user1
+    password: $2a$10$Zh4Or3sUAiKfajv7qiy8aOqeDlXmv/MFqqPG/uim4ANBuNxifJ0OG
+    bio: Hello, I'm user1!
+  user2:
+    username: user2
+    password: $2a$10$6O69ue7iOzNeYAvdr30DguNrwCOifQRzrQIaAjptqILj6hX9/7Owu
+    bio: Hey there, I'm user2!
