@@ -1,0 +1,26 @@
+{
+  "technical_post": {
+    "content_id": "post_001",
+    "title": "Zero-Knowledge Proofs in Modern DeFi",
+    "text": "Zero-knowledge proofs are revolutionizing DeFi privacy. This post explores how ZK-SNARKs enable private transactions while maintaining network security. We'll dive into the mathematical foundations and practical implementations in protocols like Tornado Cash.",
+    "tags": ["defi", "privacy", "cryptography", "blockchain"],
+    "complexity_level": 0.8,
+    "expected_audience": ["tech_enthusiast", "crypto_trader"]
+  },
+  "philosophical_post": {
+    "content_id": "post_002",
+    "title": "The Ethics of Automated Decision Making",
+    "text": "As AI systems increasingly make decisions affecting human lives, we must examine the ethical implications. This post discusses the philosophical frameworks for evaluating AI decision-making, focusing on transparency, fairness, and accountability.",
+    "tags": ["ethics", "ai", "philosophy", "society"],
+    "complexity_level": 0.7,
+    "expected_audience": ["philosophy_buff", "tech_enthusiast"]
+  },
+  "market_analysis": {
+    "content_id": "post_003",
+    "title": "DeFi Market Analysis: Q4 2023",
+    "text": "Analysis of DeFi market trends in Q4 2023. Examining TVL changes, new protocol launches, and yield farming opportunities. Including statistical analysis of major protocol performances and future projections.",
+    "tags": ["defi", "market analysis", "trading", "crypto"],
+    "complexity_level": 0.6,
+    "expected_audience": ["crypto_trader", "tech_enthusiast"]
+  }
+}

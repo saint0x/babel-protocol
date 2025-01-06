@@ -1,0 +1,38 @@
+{
+  "tech_enthusiast": {
+    "user_id": "user_001",
+    "name": "Alex Chen",
+    "bio": "Former Silicon Valley engineer turned crypto researcher. Passionate about decentralized systems and AI.",
+    "interests": ["blockchain", "artificial intelligence", "distributed systems", "cryptography", "tech startups"],
+    "expertise_areas": ["programming", "system architecture", "blockchain"],
+    "engagement_patterns": {
+      "reading_depth": 0.9,
+      "comment_frequency": 0.7,
+      "content_creation": 0.6
+    }
+  },
+  "philosophy_buff": {
+    "user_id": "user_002",
+    "name": "Sarah O'Connor",
+    "bio": "Philosophy professor specializing in ethics of technology. Researching implications of AI on society.",
+    "interests": ["ethics", "philosophy of mind", "AI ethics", "consciousness", "social impact"],
+    "expertise_areas": ["philosophy", "ethics", "critical thinking"],
+    "engagement_patterns": {
+      "reading_depth": 0.95,
+      "comment_frequency": 0.8,
+      "content_creation": 0.4
+    }
+  },
+  "crypto_trader": {
+    "user_id": "user_003",
+    "name": "Mike Rodriguez",
+    "bio": "Day trader turned DeFi enthusiast. Analyzing crypto markets and blockchain protocols.",
+    "interests": ["defi", "trading", "market analysis", "tokenomics", "crypto"],
+    "expertise_areas": ["trading", "market analysis", "defi protocols"],
+    "engagement_patterns": {
+      "reading_depth": 0.7,
+      "comment_frequency": 0.9,
+      "content_creation": 0.8
+    }
+  }
+}
