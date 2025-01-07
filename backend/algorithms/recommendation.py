@@ -58,38 +58,51 @@ class ContentRecommendationSystem(BaseAlgorithm):
     
     def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
         """Process user profile and return personalized recommendations"""
-        if 'content_id' in data:
-            # Add content to store
-            self.add_content(
-                data['content_id'],
-                data['text'],
-                data['timestamp'],
-                data.get('authenticity_score', 0.5),
-                data.get('metadata', {})
-            )
+        try:
+            mode = data.get('mode', 'personalized')
+            
+            if mode == 'similar_content':
+                if 'content_id' not in data:
+                    raise ValueError("content_id required for similar_content mode")
+                    
+                # Add content to store if not exists
+                if 'text' in data:
+                    self.add_content(
+                        data['content_id'],
+                        data['text'],
+                        data.get('timestamp', time.time()),
+                        data.get('authenticity_score', 0.5),
+                        data.get('metadata', {})
+                    )
+                
+                # Find similar content
+                recommendations = self._find_similar_content(data['content_id'])
+            else:  # personalized mode
+                if 'user_id' not in data or 'user_profile' not in data:
+                    raise ValueError("user_id and user_profile required for personalized mode")
+                
+                # Update user profile
+                self.user_profiles[data['user_id']] = data['user_profile']
+                
+                # Generate personalized recommendations
+                recommendations = self._generate_recommendations(data['user_id'])
+            
             return AlgorithmResponse(
                 algorithm_id='content_recommendation_v1',
                 timestamp=time.time(),
-                results=[{'status': 'content_added'}],
+                results=recommendations,
                 metrics=self.get_metrics().dict()
             )
-        
-        # Generate recommendations
-        user_id = data['user_id']
-        user_profile = data['user_profile']
-        
-        # Update user profile
-        self.user_profiles[user_id] = user_profile
-        
-        # Calculate recommendations
-        recommendations = self._generate_recommendations(user_id)
-        
-        return AlgorithmResponse(
-            algorithm_id='content_recommendation_v1',
-            timestamp=time.time(),
-            results=recommendations,
-            metrics=self.get_metrics().dict()
-        )
+        except Exception as e:
+            return AlgorithmResponse(
+                algorithm_id='content_recommendation_v1',
+                timestamp=time.time(),
+                results=[{
+                    'error': str(e),
+                    'content_id': data.get('content_id', 'unknown')
+                }],
+                metrics=self.get_metrics().dict()
+            )
     
     def _generate_recommendations(self, user_id: str) -> List[Dict[str, Any]]:
         """Generate personalized recommendations for user"""
@@ -151,22 +164,29 @@ class ContentRecommendationSystem(BaseAlgorithm):
         if not interests and not expertise_areas:
             return 0.5  # Default score
         
-        # Calculate interest match
-        interest_match = sum(
-            1 for interest in interests
-            if interest.lower() in text.lower() or
-            interest.lower() in str(metadata).lower()
-        ) / max(1, len(interests))
-        
-        # Calculate expertise match
-        expertise_match = sum(
-            1 for area in expertise_areas
-            if area.lower() in text.lower() or
-            area.lower() in str(metadata).lower()
-        ) / max(1, len(expertise_areas))
-        
-        # Combine scores with weights
-        return 0.7 * interest_match + 0.3 * expertise_match
+        try:
+            # Preprocess text content
+            processed_text = text.lower() if isinstance(text, str) else ""
+            processed_metadata = str(metadata).lower()
+            
+            # Calculate interest match
+            interest_match = sum(
+                1 for interest in interests
+                if interest.lower() in processed_text or
+                interest.lower() in processed_metadata
+            ) / max(1, len(interests))
+            
+            # Calculate expertise match
+            expertise_match = sum(
+                1 for area in expertise_areas
+                if area.lower() in processed_text or
+                area.lower() in processed_metadata
+            ) / max(1, len(expertise_areas))
+            
+            # Combine scores with weights
+            return 0.7 * interest_match + 0.3 * expertise_match
+        except (AttributeError, TypeError):
+            return 0.5  # Default score if text processing fails
     
     def _calculate_engagement(self, content_id: str, engagement_patterns: Dict[str, Any]) -> float:
         """Calculate predicted engagement score based on user patterns"""
@@ -203,3 +223,75 @@ class ContentRecommendationSystem(BaseAlgorithm):
             return 0.4
         else:
             return 0.2  # Older than 30 days 
+    
+    def _find_similar_content(self, content_id: str) -> List[Dict[str, Any]]:
+        """Find content similar to the given content_id"""
+        if content_id not in self.content_store:
+            return []
+        
+        target_content = self.content_store[content_id]
+        scores = []
+        
+        for other_id, other_content in self.content_store.items():
+            if other_id == content_id:
+                continue
+            
+            # Calculate text similarity if text exists
+            text_similarity = 0.0
+            if isinstance(target_content.get('text', ''), str) and isinstance(other_content.get('text', ''), str):
+                text_similarity = self._calculate_text_similarity(
+                    target_content['text'],
+                    other_content['text']
+                )
+            
+            # Calculate metadata similarity
+            metadata_similarity = self._calculate_metadata_similarity(
+                target_content.get('metadata', {}),
+                other_content.get('metadata', {})
+            )
+            
+            # Calculate final similarity score
+            similarity_score = 0.7 * text_similarity + 0.3 * metadata_similarity
+            
+            scores.append({
+                'content_id': other_id,
+                'score': similarity_score,
+                'similarity_score': similarity_score
+            })
+        
+        # Sort by similarity score
+        scores.sort(key=lambda x: x['score'], reverse=True)
+        return scores[:10]  # Return top 10 similar items
+    
+    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """Calculate similarity between two text strings"""
+        # Convert to sets of words
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        # Calculate Jaccard similarity
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _calculate_metadata_similarity(self, metadata1: Dict[str, Any], metadata2: Dict[str, Any]) -> float:
+        """Calculate similarity between content metadata"""
+        # Extract comparable fields
+        fields1 = {str(k): str(v) for k, v in metadata1.items()}
+        fields2 = {str(k): str(v) for k, v in metadata2.items()}
+        
+        # Calculate field overlap
+        common_keys = set(fields1.keys()).intersection(fields2.keys())
+        if not common_keys:
+            return 0.0
+        
+        # Calculate similarity for each common field
+        similarities = []
+        for key in common_keys:
+            if fields1[key] == fields2[key]:
+                similarities.append(1.0)
+            else:
+                similarities.append(0.0)
+        
+        return sum(similarities) / len(similarities) 

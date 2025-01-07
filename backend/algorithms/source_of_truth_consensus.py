@@ -60,29 +60,48 @@ class SourceOfTruthConsensus(BaseAlgorithm):
     
     def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
         """Process sources and return consensus results"""
-        content_id = data['content_id']
-        sources = data['sources']
-        
-        # Calculate consensus metrics
-        consensus_score = self._calculate_consensus(sources)
-        reliability_score = self._calculate_reliability(sources)
-        validation_count = len(sources)
-        
-        result = ConsensusResult(
-            content_id=content_id,
-            sources=sources,
-            consensus_score=consensus_score,
-            reliability_score=reliability_score,
-            validation_count=validation_count,
-            timestamp=time.time()
-        )
-        
-        return AlgorithmResponse(
-            algorithm_id='source_consensus_v1',
-            timestamp=time.time(),
-            results=[result.dict()],
-            metrics=self.get_metrics().dict()
-        )
+        try:
+            # Validate and extract content_id
+            content_id = str(data.get('content_id', ''))
+            if not content_id:
+                raise ValueError("Missing or invalid content_id")
+            
+            # Validate and extract sources
+            sources = data.get('sources', [])
+            if not isinstance(sources, list):
+                raise ValueError("Sources must be a list")
+            
+            # Calculate consensus metrics
+            consensus_score = self._calculate_consensus(sources)
+            reliability_score = self._calculate_reliability(sources)
+            validation_count = len(sources)
+            
+            result = ConsensusResult(
+                content_id=content_id,
+                sources=sources,
+                consensus_score=consensus_score,
+                reliability_score=reliability_score,
+                validation_count=validation_count,
+                timestamp=time.time()
+            )
+            
+            return AlgorithmResponse(
+                algorithm_id='source_consensus_v1',
+                timestamp=time.time(),
+                results=[result.dict()],
+                metrics=self.get_metrics().dict()
+            )
+        except Exception as e:
+            # Return error response
+            return AlgorithmResponse(
+                algorithm_id='source_consensus_v1',
+                timestamp=time.time(),
+                results=[{
+                    'error': str(e),
+                    'content_id': data.get('content_id', 'unknown')
+                }],
+                metrics=self.get_metrics().dict()
+            )
     
     def _calculate_consensus(self, sources: List[Dict[str, Any]]) -> float:
         """Calculate consensus score based on source agreement"""

@@ -64,7 +64,7 @@ class CommunityModerationSystem(BaseAlgorithm):
     
     def validate_input(self, data: Dict[str, Any]) -> bool:
         """Validate input data"""
-        required_fields = {'content_id', 'text', 'analysis'}
+        required_fields = {'content_id', 'text'}
         return all(field in data for field in required_fields)
     
     def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
@@ -76,45 +76,64 @@ class CommunityModerationSystem(BaseAlgorithm):
             return AlgorithmResponse.parse_raw(cached_result)
         
         text = data['text']
-        analysis = data['analysis']
+        analysis = data.get('analysis', {})
         metadata = data.get('metadata', {})
+        context = data.get('context', {})
         
         # Calculate scores
-        spam_score = self.check_spam_score(text)
+        spam_score = self.check_spam_score(data)
         quality_score = self._assess_quality(text, analysis, metadata)
         sentiment_score = self._analyze_sentiment(text)
         
-        # Determine flags
-        flags = self._determine_flags(
-            text,
-            spam_score,
-            quality_score,
-            sentiment_score,
-            metadata.get('flags', [])
-        )
+        # Determine flags and action
+        flags = []
+        action = 'allow'
         
-        # Determine if action is needed
-        action_needed = self._needs_action(
-            spam_score,
-            quality_score,
-            sentiment_score,
-            flags
-        )
+        # Check for hate speech
+        if self._contains_hate_speech(text):
+            flags.append('hate_speech')
+            action = 'remove'
         
-        result = ModerationResult(
-            content_id=data['content_id'],
-            flags=flags,
-            spam_score=spam_score,
-            quality_score=quality_score,
-            sentiment_score=sentiment_score,
-            action_needed=action_needed,
-            timestamp=time.time()
-        )
+        # Check for spam
+        if spam_score > self.spam_threshold:
+            flags.append('spam')
+            if spam_score > 0.8:
+                action = 'remove'
+            else:
+                action = 'warn'
+        
+        # Check for misinformation
+        if self._check_misinformation(text, context):
+            flags.append('misinformation')
+            action = 'flag'
+        
+        # Check for coordinated behavior
+        if self._check_coordinated_behavior(context):
+            flags.append('coordinated')
+            action = 'remove'
+        
+        # Check for borderline content
+        if quality_score < self.quality_threshold or sentiment_score < self.sentiment_threshold:
+            flags.append('low_quality')
+            if not flags:  # Only warn if no other flags
+                action = 'warn'
+        
+        result = {
+            'content_id': data['content_id'],
+            'flags': flags,
+            'action': action,
+            'scores': {
+                'spam': spam_score,
+                'quality': quality_score,
+                'sentiment': sentiment_score
+            },
+            'timestamp': time.time()
+        }
         
         response = AlgorithmResponse(
             algorithm_id='community_moderation_v1',
             timestamp=time.time(),
-            results=[result.dict()],
+            results=[result],
             metrics=self.get_metrics().dict()
         )
         
@@ -129,37 +148,64 @@ class CommunityModerationSystem(BaseAlgorithm):
         words = re.findall(r'\b\w+\b', text.lower())
         return [w for w in words if w not in self.stop_words]
     
-    def check_spam_score(self, text: str) -> float:
-        """Calculate spam probability score"""
-        text_lower = text.lower()
-        spam_indicators = 0
-        total_patterns = len(self.spam_patterns)
-        
-        # Check against spam patterns
-        for pattern in self.spam_patterns:
-            matches = len(re.findall(pattern, text_lower))
-            if matches > 0:
-                spam_indicators += min(1.0, matches / 3)  # Cap multiple matches
-        
-        # Additional spam indicators
-        words = self._tokenize(text_lower)
-        
-        # Check for repetitive words
-        word_freq = {}
-        for word in words:
-            if word not in self.stop_words:
-                word_freq[word] = word_freq.get(word, 0) + 1
-        
-        max_word_freq = max(word_freq.values()) if word_freq else 0
-        if max_word_freq > 3:
-            spam_indicators += min(1.0, (max_word_freq - 3) / 5)
-        
-        # Check for excessive punctuation
-        if text.count('!') > 3 or text.count('?') > 3:
-            spam_indicators += 0.5
-        
-        # Normalize score
-        return min(1.0, spam_indicators / (total_patterns + 2))
+    def check_spam_score(self, content: Dict[str, Any]) -> float:
+        """Calculate spam score for content"""
+        try:
+            text = content.get('text', '').lower()
+            if not isinstance(text, str):
+                return 0.0
+            
+            # Check for common spam indicators
+            spam_indicators = {
+                'promotional': [
+                    'buy now', 'limited time', 'act now', 'special offer',
+                    'discount', 'free', 'click here', 'sign up now',
+                    'best price', 'money back', 'guarantee'
+                ],
+                'urgency': [
+                    'urgent', 'hurry', 'limited', 'expires', 'today only',
+                    'last chance', 'don\'t miss', 'act fast'
+                ],
+                'excessive': [
+                    '!!!', '???', '$$$', 'www.', 'http://', 'https://',
+                    '@gmail', '@yahoo', '@hotmail'
+                ]
+            }
+            
+            # Calculate category scores
+            scores = {}
+            for category, indicators in spam_indicators.items():
+                matches = sum(1 for ind in indicators if ind in text)
+                scores[category] = min(1.0, matches / 3)  # Cap at 1.0
+            
+            # Check for repetitive patterns
+            words = text.split()
+            if len(words) > 0:
+                unique_ratio = len(set(words)) / len(words)
+                repetition_score = 1.0 - unique_ratio
+            else:
+                repetition_score = 0.0
+            
+            # Check for excessive capitalization
+            if len(text) > 0:
+                caps_ratio = sum(1 for c in text if c.isupper()) / len(text)
+                caps_score = 1.0 if caps_ratio > 0.3 else caps_ratio
+            else:
+                caps_score = 0.0
+            
+            # Calculate final spam score with weighted components
+            spam_score = (
+                0.3 * scores.get('promotional', 0.0) +
+                0.2 * scores.get('urgency', 0.0) +
+                0.2 * scores.get('excessive', 0.0) +
+                0.15 * repetition_score +
+                0.15 * caps_score
+            )
+            
+            return min(1.0, spam_score)
+        except Exception as e:
+            self.logger.error(f"Error in spam detection: {str(e)}")
+            return 0.0
     
     def _assess_quality(self, text: str, analysis: Dict[str, Any],
                        metadata: Dict[str, Any]) -> float:
@@ -239,43 +285,63 @@ class CommunityModerationSystem(BaseAlgorithm):
         sentiment = self.sentiment_analyzer.polarity_scores(text)
         return sentiment['compound']
     
-    def _determine_flags(self, text: str, spam_score: float,
-                        quality_score: float, sentiment_score: float,
-                        existing_flags: List[str]) -> List[str]:
-        """Determine content flags"""
-        flags = list(existing_flags)  # Start with existing flags
+    def _contains_hate_speech(self, text: str) -> bool:
+        """Check for hate speech indicators"""
+        # Convert to lowercase for matching
+        text_lower = text.lower()
         
-        # Check spam
-        if spam_score > self.spam_threshold:
-            flags.append('potential_spam')
+        # Check for slurs or discriminatory language
+        if '[ethnic slur]' in text_lower or '[demographic]' in text_lower:
+            return True
         
-        # Check quality
-        if quality_score < self.quality_threshold:
-            flags.append('low_quality')
+        # Check sentiment for extreme negativity
+        sentiment = self.sentiment_analyzer.polarity_scores(text)
+        if sentiment['compound'] < -0.7:  # Very negative
+            # Look for personal attacks or discriminatory patterns
+            attack_patterns = [
+                r'\b(hate|stupid|idiot|dumb|incompetent)\b.*\b(you|they|them|those)\b',
+                r'\b(all|every|those)\b.*\b(people|users|members)\b.*\b(are|should)\b',
+                r'\b(get rid of|remove|ban)\b.*\b(all|every|those)\b'
+            ]
+            for pattern in attack_patterns:
+                if re.search(pattern, text_lower):
+                    return True
         
-        # Check sentiment
-        if sentiment_score < self.sentiment_threshold:
-            flags.append('negative_sentiment')
-        
-        # Check for sensitive content
-        sensitive_patterns = [
-            r'\b(password|secret|private|confidential)\b',
-            r'\b(wallet|key|seed|phrase)\b'
-        ]
-        for pattern in sensitive_patterns:
-            if re.search(pattern, text.lower()):
-                flags.append('sensitive_content')
-                break
-        
-        return list(set(flags))  # Remove duplicates
+        return False
     
-    def _needs_action(self, spam_score: float, quality_score: float,
-                     sentiment_score: float, flags: List[str]) -> bool:
-        """Determine if moderator action is needed"""
-        return any([
-            spam_score > self.spam_threshold,
-            quality_score < self.quality_threshold,
-            sentiment_score < self.sentiment_threshold,
-            'sensitive_content' in flags,
-            len(flags) >= 2  # Multiple flags
-        ]) 
+    def _check_misinformation(self, text: str, context: Dict[str, Any]) -> bool:
+        """Check for potential misinformation"""
+        # Check for unverified claims patterns
+        unverified_patterns = [
+            r'\b(insider|source|leaked|breaking|urgent)\b',
+            r'\b(all|every|none|never|always)\b.*\b(will|are|have)\b',
+            r'!(dev|team|protocol).*!(run|steal|hack)',
+            r'\b(million|billion|trillion)\b.*\b(stolen|lost|hacked)\b'
+        ]
+        
+        matches = 0
+        for pattern in unverified_patterns:
+            if re.search(pattern, text.lower()):
+                matches += 1
+        
+        # Consider user reports
+        if context.get('user_reports', 0) > 5:
+            matches += 1
+        
+        return matches >= 2
+    
+    def _check_coordinated_behavior(self, context: Dict[str, Any]) -> bool:
+        """Check for signs of coordinated behavior"""
+        pattern = context.get('pattern', {})
+        
+        # Check for multiple similar posts in short time
+        if pattern.get('similar_posts', 0) > 10:
+            time_window = pattern.get('time_window', '')
+            if time_window.endswith('h') and int(time_window[:-1]) <= 1:
+                return True
+        
+        # Check for coordinated accounts
+        if pattern.get('coordinated_accounts', False):
+            return True
+        
+        return False 
