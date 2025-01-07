@@ -1,245 +1,192 @@
 """
-Feedback Loop Optimization Algorithm for Gossip Social Network
+Feedback Loop Optimization Algorithm
 
-This algorithm implements a sophisticated feedback loop system that continuously optimizes
-the platform's algorithms based on user interactions, content performance, and community feedback.
-
-Core Philosophy:
-- Continuous learning from user behavior
-- Community-driven algorithm refinement
-- Balanced optimization goals
-- Transparency in adjustments
-- Preservation of platform values
-
-Key Features:
-1. Multi-metric optimization
-2. User feedback integration
-3. Algorithm performance tracking
-4. Dynamic parameter adjustment
-5. Community impact assessment
+This module implements feedback-based optimization for content recommendations.
+It analyzes user engagement patterns and adjusts recommendation weights accordingly.
 """
 
-class FeedbackLoopOptimizer:
-    def __init__(self):
-        self.algorithm_metrics = {}    # Maps algorithm_id to performance metrics
-        self.user_feedback = {}        # Maps feedback_id to user feedback
-        self.parameter_history = {}    # Maps parameter_id to adjustment history
-        self.impact_assessments = {}   # Maps assessment_id to impact data
-        
-        # Define optimization parameters
+import time
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+
+from pydantic import BaseModel
+
+from .base import BaseAlgorithm, AlgorithmResponse, AlgorithmMetrics
+
+class FeedbackData(BaseModel):
+    """Feedback data model"""
+    feedback_id: str
+    algorithm_id: str
+    feedback_type: str
+    feedback_data: Dict[str, Any]
+    timestamp: Optional[float] = None
+
+class OptimizationResult(BaseModel):
+    """Optimization result model"""
+    user_id: str
+    algorithm_id: str
+    optimizations: Dict[str, float]
+    confidence: float
+    timestamp: float
+
+class FeedbackLoopOptimizer(BaseAlgorithm):
+    """Feedback loop optimization implementation"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.feedback_history: Dict[str, List[FeedbackData]] = {}
         self.optimization_weights = {
-            'user_satisfaction': 0.3,
-            'content_quality': 0.2,
-            'engagement_depth': 0.2,
-            'community_health': 0.3
+            'engagement_score': 0.4,
+            'read_time': 0.3,
+            'scroll_depth': 0.3
         }
         
+        # Learning rate for weight adjustments
         self.learning_rate = 0.1
-        self.adjustment_threshold = 0.05
-
-    def record_algorithm_performance(self, algorithm_id, metrics):
-        """
-        Record performance metrics for an algorithm
         
-        Parameters:
-        - algorithm_id: Identifier for the algorithm
-        - metrics: Dict of performance metrics
-        """
-        if algorithm_id not in self.algorithm_metrics:
-            self.algorithm_metrics[algorithm_id] = []
+        # Minimum confidence threshold
+        self.min_confidence = 0.6
+    
+    def validate_input(self, data: Dict[str, Any]) -> bool:
+        """Validate input data"""
+        if 'feedback_id' in data:
+            required_fields = {'feedback_id', 'algorithm_id', 'feedback_type', 'feedback_data'}
+        else:
+            required_fields = {'user_id', 'feedback_history'}
+        return all(field in data for field in required_fields)
+    
+    def record_user_feedback(self, feedback_id: str, algorithm_id: str, 
+                           feedback_type: str, feedback_data: Dict[str, Any]) -> None:
+        """Record user feedback for optimization"""
+        feedback = FeedbackData(
+            feedback_id=feedback_id,
+            algorithm_id=algorithm_id,
+            feedback_type=feedback_type,
+            feedback_data=feedback_data,
+            timestamp=time.time()
+        )
+        
+        user_id = feedback_data.get('user_id', 'default')
+        if user_id not in self.feedback_history:
+            self.feedback_history[user_id] = []
+        self.feedback_history[user_id].append(feedback)
+    
+    def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
+        """Process feedback data and optimize recommendations"""
+        if 'feedback_id' in data:
+            # Record new feedback
+            self.record_user_feedback(
+                data['feedback_id'],
+                data['algorithm_id'],
+                data['feedback_type'],
+                data['feedback_data']
+            )
+            return AlgorithmResponse(
+                algorithm_id='feedback_optimization_v1',
+                timestamp=time.time(),
+                results=[{'status': 'feedback_recorded'}],
+                metrics=self.get_metrics().dict()
+            )
+        
+        # Optimize based on feedback history
+        user_id = data['user_id']
+        feedback_history = data['feedback_history']
+        
+        # Calculate optimization weights
+        optimizations = self._calculate_optimizations(user_id, feedback_history)
+        
+        # Calculate confidence score
+        confidence = self._calculate_confidence(feedback_history)
+        
+        result = OptimizationResult(
+            user_id=user_id,
+            algorithm_id='feedback_optimization_v1',
+            optimizations=optimizations,
+            confidence=confidence,
+            timestamp=time.time()
+        )
+        
+        return AlgorithmResponse(
+            algorithm_id='feedback_optimization_v1',
+            timestamp=time.time(),
+            results=[result.dict()],
+            metrics=self.get_metrics().dict()
+        )
+    
+    def _calculate_optimizations(self, user_id: str, feedback_history: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Calculate optimization weights based on feedback history"""
+        if not feedback_history:
+            return self.optimization_weights.copy()
+        
+        # Initialize weight adjustments
+        weight_adjustments = {k: 0.0 for k in self.optimization_weights}
+        total_feedback = len(feedback_history)
+        
+        for feedback in feedback_history:
+            metrics = feedback.get('metrics', {})
             
-        self.algorithm_metrics[algorithm_id].append({
-            'timestamp': self._get_current_timestamp(),
-            'metrics': metrics
-        })
-        
-        # Trigger optimization if we have enough data
-        if len(self.algorithm_metrics[algorithm_id]) >= 10:
-            self._optimize_algorithm(algorithm_id)
-
-    def record_user_feedback(self, feedback_id, algorithm_id, feedback_type, feedback_data):
-        """
-        Record user feedback about algorithm performance
-        
-        Parameters:
-        - feedback_type: Type of feedback (satisfaction, suggestion, issue)
-        - feedback_data: Detailed feedback information
-        """
-        self.user_feedback[feedback_id] = {
-            'algorithm_id': algorithm_id,
-            'type': feedback_type,
-            'data': feedback_data,
-            'timestamp': self._get_current_timestamp()
-        }
-        
-        # Aggregate feedback for the algorithm
-        self._aggregate_feedback(algorithm_id)
-
-    def _optimize_algorithm(self, algorithm_id):
-        """
-        Optimize algorithm parameters based on performance metrics and feedback
-        """
-        metrics_history = self.algorithm_metrics[algorithm_id]
-        recent_metrics = metrics_history[-10:]  # Look at last 10 measurements
-        
-        # Calculate performance trends
-        trends = self._calculate_performance_trends(recent_metrics)
-        
-        # Get aggregated user feedback
-        feedback = self._get_aggregated_feedback(algorithm_id)
-        
-        # Calculate adjustment scores
-        adjustments = self._calculate_parameter_adjustments(trends, feedback)
-        
-        # Apply adjustments if they exceed threshold
-        self._apply_parameter_adjustments(algorithm_id, adjustments)
-        
-        # Record impact assessment
-        self._record_impact_assessment(algorithm_id, trends, adjustments)
-
-    def _calculate_performance_trends(self, metrics_history):
-        """Calculate trends in performance metrics"""
-        trends = {}
-        
-        # Get the first and last metrics
-        first_metrics = metrics_history[0]['metrics']
-        last_metrics = metrics_history[-1]['metrics']
-        
-        # Calculate changes in each metric
-        for metric_name in first_metrics:
-            if metric_name in last_metrics:
-                change = last_metrics[metric_name] - first_metrics[metric_name]
-                trends[metric_name] = {
-                    'change': change,
-                    'percent_change': change / first_metrics[metric_name] if first_metrics[metric_name] != 0 else 0
-                }
-        
-        return trends
-
-    def _aggregate_feedback(self, algorithm_id):
-        """Aggregate user feedback for an algorithm"""
-        recent_feedback = [
-            feedback for feedback in self.user_feedback.values()
-            if feedback['algorithm_id'] == algorithm_id
-        ]
-        
-        # Aggregate by feedback type
-        aggregated = {
-            'satisfaction_score': 0,
-            'issue_count': 0,
-            'suggestion_count': 0,
-            'common_issues': defaultdict(int),
-            'common_suggestions': defaultdict(int)
-        }
-        
-        for feedback in recent_feedback:
-            if feedback['type'] == 'satisfaction':
-                aggregated['satisfaction_score'] += feedback['data'].get('score', 0)
-            elif feedback['type'] == 'issue':
-                aggregated['issue_count'] += 1
-                aggregated['common_issues'][feedback['data'].get('category')] += 1
-            elif feedback['type'] == 'suggestion':
-                aggregated['suggestion_count'] += 1
-                aggregated['common_suggestions'][feedback['data'].get('category')] += 1
-        
-        # Normalize satisfaction score
-        if recent_feedback:
-            aggregated['satisfaction_score'] /= len(recent_feedback)
-        
-        return aggregated
-
-    def _calculate_parameter_adjustments(self, trends, feedback):
-        """Calculate parameter adjustments based on trends and feedback"""
-        adjustments = {}
-        
-        # Combine trend and feedback data
-        combined_score = 0
-        for metric, weight in self.optimization_weights.items():
-            if metric in trends:
-                combined_score += trends[metric]['percent_change'] * weight
-        
-        # Add feedback influence
-        feedback_score = feedback.get('satisfaction_score', 0)
-        combined_score = (combined_score * 0.7) + (feedback_score * 0.3)
-        
-        # Calculate adjustments for different parameters
-        adjustments['content_weight'] = combined_score * self.learning_rate
-        adjustments['engagement_weight'] = combined_score * self.learning_rate
-        adjustments['authenticity_weight'] = combined_score * self.learning_rate
-        
-        return adjustments
-
-    def _apply_parameter_adjustments(self, algorithm_id, adjustments):
-        """Apply calculated parameter adjustments"""
-        if algorithm_id not in self.parameter_history:
-            self.parameter_history[algorithm_id] = []
-        
-        # Record adjustment history
-        self.parameter_history[algorithm_id].append({
-            'timestamp': self._get_current_timestamp(),
-            'adjustments': adjustments
-        })
-        
-        # Only apply adjustments that exceed threshold
-        applied_adjustments = {
-            param: value
-            for param, value in adjustments.items()
-            if abs(value) >= self.adjustment_threshold
-        }
-        
-        return applied_adjustments
-
-    def _record_impact_assessment(self, algorithm_id, trends, adjustments):
-        """Record impact assessment of parameter adjustments"""
-        assessment_id = f"{algorithm_id}_{self._get_current_timestamp()}"
-        
-        self.impact_assessments[assessment_id] = {
-            'algorithm_id': algorithm_id,
-            'timestamp': self._get_current_timestamp(),
-            'trends_before': trends,
-            'adjustments_made': adjustments,
-            'status': 'pending'  # Will be updated after measuring impact
-        }
-
-    def get_optimization_status(self, algorithm_id):
-        """
-        Get current optimization status for an algorithm
-        Returns dict with optimization metrics and history
-        """
-        if algorithm_id not in self.algorithm_metrics:
-            return None
+            # Calculate engagement impact
+            if 'engagement_score' in metrics:
+                weight_adjustments['engagement_score'] += (
+                    metrics['engagement_score'] - 0.5
+                ) * self.learning_rate
             
-        recent_metrics = self.algorithm_metrics[algorithm_id][-10:]
-        recent_adjustments = self.parameter_history.get(algorithm_id, [])[-5:]
-        
-        return {
-            'recent_performance': self._calculate_performance_trends(recent_metrics),
-            'recent_adjustments': recent_adjustments,
-            'current_parameters': self._get_current_parameters(algorithm_id),
-            'feedback_summary': self._aggregate_feedback(algorithm_id)
-        }
-
-    def _get_current_parameters(self, algorithm_id):
-        """Get current parameter values for an algorithm"""
-        if algorithm_id not in self.parameter_history:
-            return {}
+            # Calculate read time impact
+            if 'read_time' in metrics:
+                normalized_read_time = min(metrics['read_time'] / 300, 1.0)  # Normalize to 5 minutes
+                weight_adjustments['read_time'] += (
+                    normalized_read_time - 0.5
+                ) * self.learning_rate
             
-        # Start with base parameters
-        current_params = {
-            'content_weight': 1.0,
-            'engagement_weight': 1.0,
-            'authenticity_weight': 1.0
-        }
+            # Calculate scroll depth impact
+            if 'scroll_depth' in metrics:
+                weight_adjustments['scroll_depth'] += (
+                    metrics['scroll_depth'] - 0.5
+                ) * self.learning_rate
         
-        # Apply all historical adjustments
-        for history_entry in self.parameter_history[algorithm_id]:
-            for param, adjustment in history_entry['adjustments'].items():
-                if param in current_params:
-                    current_params[param] *= (1 + adjustment)
+        # Apply adjustments and normalize
+        optimized_weights = {}
+        for key in self.optimization_weights:
+            optimized_weights[key] = max(0.1, min(0.8, 
+                self.optimization_weights[key] + weight_adjustments[key] / total_feedback
+            ))
         
-        return current_params
-
-    def _get_current_timestamp(self):
-        """Get current timestamp"""
-        import time
-        return time.time() 
+        # Normalize to sum to 1
+        total_weight = sum(optimized_weights.values())
+        return {k: v/total_weight for k, v in optimized_weights.items()}
+    
+    def _calculate_confidence(self, feedback_history: List[Dict[str, Any]]) -> float:
+        """Calculate confidence score for optimizations"""
+        if not feedback_history:
+            return self.min_confidence
+        
+        # Factors affecting confidence:
+        # 1. Number of feedback points
+        # 2. Consistency of feedback
+        # 3. Recency of feedback
+        
+        num_feedback = len(feedback_history)
+        confidence_base = min(0.8, 0.4 + 0.1 * num_feedback)  # Increases with more feedback
+        
+        # Calculate consistency
+        if num_feedback > 1:
+            engagement_scores = [
+                f.get('metrics', {}).get('engagement_score', 0.5) 
+                for f in feedback_history
+            ]
+            variance = sum((s - sum(engagement_scores)/num_feedback)**2 
+                         for s in engagement_scores) / num_feedback
+            consistency_factor = max(0.5, 1.0 - variance)
+        else:
+            consistency_factor = 0.7
+        
+        # Calculate recency
+        current_time = time.time()
+        avg_age = sum(
+            current_time - f.get('metrics', {}).get('timestamp', current_time)
+            for f in feedback_history
+        ) / num_feedback
+        recency_factor = max(0.5, min(1.0, 7*24*3600 / max(1, avg_age)))  # Decay over a week
+        
+        confidence = confidence_base * consistency_factor * recency_factor
+        return max(self.min_confidence, min(0.95, confidence))  # Bound between min and 0.95 

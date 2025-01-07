@@ -1,23 +1,20 @@
 """
-Recommendation Algorithm for Babel Protocol
+Content Recommendation Algorithm
 
-This algorithm implements content recommendation capabilities that balance
-relevance, engagement, authenticity, and temporal factors while promoting
-healthy content discovery and community interaction.
+This module implements personalized content recommendations based on user preferences,
+content features, and engagement patterns.
 """
 
-from typing import Dict, List, Optional, Any
 import time
+from typing import Dict, Any, List, Optional
 from datetime import datetime
+
 from pydantic import BaseModel
-from nltk.tokenize import TreebankWordTokenizer
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
 
-from .base import BabelAlgorithm
+from .base import BaseAlgorithm, AlgorithmResponse
 
-class ContentRecommendation(BaseModel):
-    """Content recommendation model"""
+class RecommendationScore(BaseModel):
+    """Recommendation score model"""
     content_id: str
     score: float
     relevance_score: float
@@ -25,159 +22,184 @@ class ContentRecommendation(BaseModel):
     authenticity_score: float
     temporal_score: float
 
-class ContentRecommendationSystem(BabelAlgorithm):
-    """Content Recommendation implementation"""
+class ContentRecommendationSystem(BaseAlgorithm):
+    """Content recommendation system implementation"""
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
-        # Initialize NLP components
-        self.word_tokenizer = TreebankWordTokenizer()
-        self.lemmatizer = WordNetLemmatizer()
-        self.stop_words = set(stopwords.words('english'))
-        
-        # Content store
         self.content_store: Dict[str, Dict[str, Any]] = {}
+        self.user_profiles: Dict[str, Dict[str, Any]] = {}
         
-        # User interaction history
-        self.user_history: Dict[str, List[str]] = {}
-        
-        # Content engagement metrics
-        self.engagement_metrics: Dict[str, Dict[str, float]] = {}
-    
-    def add_content(
-        self,
-        content_id: str,
-        text: str,
-        timestamp: float,
-        authenticity_score: float
-    ) -> None:
-        """Add content to recommendation system"""
-        # Process text
-        tokens = self.word_tokenizer.tokenize(text.lower())
-        tokens = [
-            self.lemmatizer.lemmatize(token)
-            for token in tokens
-            if token not in self.stop_words
-        ]
-        
-        # Store content
-        self.content_store[content_id] = {
-            'text': text,
-            'tokens': tokens,
-            'timestamp': timestamp,
-            'authenticity_score': authenticity_score,
-            'engagement_score': self.engagement_metrics.get(
-                content_id, {'score': 0.5}
-            ).get('score', 0.5)
+        # Recommendation weights
+        self.weights = {
+            'relevance': 0.4,
+            'engagement': 0.3,
+            'authenticity': 0.2,
+            'temporal': 0.1
         }
     
-    def update_engagement(
-        self,
-        content_id: str,
-        user_id: str,
-        engagement_type: str,
-        engagement_value: float
-    ) -> None:
-        """Update content engagement metrics"""
-        if content_id not in self.engagement_metrics:
-            self.engagement_metrics[content_id] = {
-                'score': 0.5,
-                'interactions': 0
-            }
-        
-        # Update metrics
-        metrics = self.engagement_metrics[content_id]
-        metrics['interactions'] += 1
-        
-        # Weight new engagement value
-        alpha = 1 / (1 + metrics['interactions'])  # Decay factor
-        metrics['score'] = (
-            (1 - alpha) * metrics['score'] +
-            alpha * engagement_value
-        )
-        
-        # Update content store
-        if content_id in self.content_store:
-            self.content_store[content_id]['engagement_score'] = metrics['score']
-        
-        # Update user history
-        if user_id not in self.user_history:
-            self.user_history[user_id] = []
-        self.user_history[user_id].append(content_id)
+    def validate_input(self, data: Dict[str, Any]) -> bool:
+        """Validate input data"""
+        if 'content_id' in data:  # Adding content
+            required_fields = {'content_id', 'text', 'timestamp'}
+        else:  # Getting recommendations
+            required_fields = {'user_id', 'user_profile'}
+        return all(field in data for field in required_fields)
     
-    def process(self, data: Dict[str, Any]) -> List[ContentRecommendation]:
-        """Generate recommendations for user"""
+    def add_content(self, content_id: str, text: str, timestamp: float,
+                   authenticity_score: float, metadata: Dict[str, Any]) -> None:
+        """Add or update content in the recommendation system"""
+        self.content_store[content_id] = {
+            'text': text,
+            'timestamp': timestamp,
+            'authenticity_score': authenticity_score,
+            'metadata': metadata
+        }
+    
+    def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
+        """Process user profile and return personalized recommendations"""
+        if 'content_id' in data:
+            # Add content to store
+            self.add_content(
+                data['content_id'],
+                data['text'],
+                data['timestamp'],
+                data.get('authenticity_score', 0.5),
+                data.get('metadata', {})
+            )
+            return AlgorithmResponse(
+                algorithm_id='content_recommendation_v1',
+                timestamp=time.time(),
+                results=[{'status': 'content_added'}],
+                metrics=self.get_metrics().dict()
+            )
+        
+        # Generate recommendations
         user_id = data['user_id']
+        user_profile = data['user_profile']
         
-        # Check cache
-        cache_key = f"recommendations:{user_id}"
-        cached_result = self.get_cache(cache_key)
-        if cached_result:
-            return [ContentRecommendation.parse_raw(item) for item in cached_result]
+        # Update user profile
+        self.user_profiles[user_id] = user_profile
         
-        recommendations = []
+        # Calculate recommendations
+        recommendations = self._generate_recommendations(user_id)
+        
+        return AlgorithmResponse(
+            algorithm_id='content_recommendation_v1',
+            timestamp=time.time(),
+            results=recommendations,
+            metrics=self.get_metrics().dict()
+        )
+    
+    def _generate_recommendations(self, user_id: str) -> List[Dict[str, Any]]:
+        """Generate personalized recommendations for user"""
+        if not self.content_store:
+            return []
+        
+        user_profile = self.user_profiles.get(user_id, {})
         current_time = time.time()
+        scores = []
         
         for content_id, content in self.content_store.items():
-            # Calculate scores
+            # Calculate relevance score
+            relevance_score = self._calculate_relevance(
+                content['text'],
+                content['metadata'],
+                user_profile.get('interests', []),
+                user_profile.get('expertise_areas', [])
+            )
+            
+            # Calculate engagement score
+            engagement_score = self._calculate_engagement(
+                content_id,
+                user_profile.get('engagement_patterns', {})
+            )
+            
+            # Get authenticity score
+            authenticity_score = content['authenticity_score']
+            
+            # Calculate temporal score
             temporal_score = self._calculate_temporal_score(
                 content['timestamp'],
                 current_time
             )
             
-            relevance_score = 0.8  # Placeholder - would use actual relevance calculation
-            
-            recommendation = ContentRecommendation(
-                content_id=content_id,
-                score=self._calculate_final_score(
-                    relevance_score,
-                    content['engagement_score'],
-                    content['authenticity_score'],
-                    temporal_score
-                ),
-                relevance_score=relevance_score,
-                engagement_score=content['engagement_score'],
-                authenticity_score=content['authenticity_score'],
-                temporal_score=temporal_score
+            # Calculate final score
+            final_score = (
+                self.weights['relevance'] * relevance_score +
+                self.weights['engagement'] * engagement_score +
+                self.weights['authenticity'] * authenticity_score +
+                self.weights['temporal'] * temporal_score
             )
-            recommendations.append(recommendation)
+            
+            scores.append(RecommendationScore(
+                content_id=content_id,
+                score=final_score,
+                relevance_score=relevance_score,
+                engagement_score=engagement_score,
+                authenticity_score=authenticity_score,
+                temporal_score=temporal_score
+            ))
         
-        # Sort by score
-        recommendations.sort(key=lambda x: x.score, reverse=True)
-        
-        # Cache results
-        self.set_cache(cache_key, [r.json() for r in recommendations])
-        
-        return recommendations[:10]  # Return top 10
+        # Sort by score and return top recommendations
+        scores.sort(key=lambda x: x.score, reverse=True)
+        return [score.dict() for score in scores[:10]]  # Return top 10
     
-    def _calculate_temporal_score(
-        self,
-        content_timestamp: float,
-        current_time: float
-    ) -> float:
+    def _calculate_relevance(self, text: str, metadata: Dict[str, Any],
+                           interests: List[str], expertise_areas: List[str]) -> float:
+        """Calculate content relevance based on user interests and expertise"""
+        if not interests and not expertise_areas:
+            return 0.5  # Default score
+        
+        # Calculate interest match
+        interest_match = sum(
+            1 for interest in interests
+            if interest.lower() in text.lower() or
+            interest.lower() in str(metadata).lower()
+        ) / max(1, len(interests))
+        
+        # Calculate expertise match
+        expertise_match = sum(
+            1 for area in expertise_areas
+            if area.lower() in text.lower() or
+            area.lower() in str(metadata).lower()
+        ) / max(1, len(expertise_areas))
+        
+        # Combine scores with weights
+        return 0.7 * interest_match + 0.3 * expertise_match
+    
+    def _calculate_engagement(self, content_id: str, engagement_patterns: Dict[str, Any]) -> float:
+        """Calculate predicted engagement score based on user patterns"""
+        if not engagement_patterns:
+            return 0.5  # Default score
+        
+        # Get content complexity
+        content = self.content_store[content_id]
+        content_complexity = content['metadata'].get('complexity_level', 0.5)
+        
+        # Calculate time-of-day match
+        current_hour = datetime.now().hour
+        active_hours = engagement_patterns.get('active_hours', [])
+        time_match = 1.0 if current_hour in active_hours else 0.5
+        
+        # Calculate complexity match
+        user_complexity_preference = engagement_patterns.get('preferred_complexity', 0.5)
+        complexity_match = 1.0 - abs(content_complexity - user_complexity_preference)
+        
+        # Combine factors
+        return 0.6 * complexity_match + 0.4 * time_match
+    
+    def _calculate_temporal_score(self, content_timestamp: float, current_time: float) -> float:
         """Calculate temporal relevance score"""
         age_hours = (current_time - content_timestamp) / 3600
-        return max(0.0, 1.0 - (age_hours / 72))  # Decay over 72 hours
-    
-    def _calculate_final_score(
-        self,
-        relevance: float,
-        engagement: float,
-        authenticity: float,
-        temporal: float
-    ) -> float:
-        """Calculate final recommendation score"""
-        weights = {
-            'relevance': 0.3,
-            'engagement': 0.2,
-            'authenticity': 0.4,
-            'temporal': 0.1
-        }
         
-        return sum([
-            relevance * weights['relevance'],
-            engagement * weights['engagement'],
-            authenticity * weights['authenticity'],
-            temporal * weights['temporal']
-        ]) 
+        if age_hours < 24:  # Last 24 hours
+            return 1.0
+        elif age_hours < 72:  # 1-3 days
+            return 0.8
+        elif age_hours < 168:  # 3-7 days
+            return 0.6
+        elif age_hours < 720:  # 7-30 days
+            return 0.4
+        else:
+            return 0.2  # Older than 30 days 

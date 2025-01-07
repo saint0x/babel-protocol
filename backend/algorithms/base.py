@@ -12,11 +12,13 @@ It handles common functionality such as:
 
 import logging
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, List
 
 import psycopg2
 import redis
 from pydantic import BaseModel
+import os
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -33,14 +35,23 @@ class AlgorithmMetrics(BaseModel):
     cache_hits: int
     cache_misses: int
 
-class BabelAlgorithm:
+class AlgorithmResponse(BaseModel):
+    """Standard response format for all algorithms"""
+    algorithm_id: str
+    timestamp: float
+    results: List[Any]
+    metrics: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+class BaseAlgorithm:
     """Base class for all Babel Protocol algorithms"""
     
     def __init__(
         self,
         redis_url: str = "redis://localhost:6379/0",
         postgres_url: str = "postgresql://localhost/babel",
-        cache_ttl: int = 3600
+        cache_ttl: int = 3600,
+        db_config=None  # Test database configuration
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.cache_ttl = cache_ttl
@@ -53,7 +64,17 @@ class BabelAlgorithm:
             cache_misses=0
         )
         
-        # Initialize connections
+        # Test mode takes precedence
+        if db_config or os.environ.get('BABEL_TEST_MODE'):
+            # Test mode - use SQLite only
+            self.db_config = db_config
+            self.db = self.db_config.get_connection() if db_config else None
+            self.cursor = self.db.cursor() if self.db else None
+            self.redis = None
+            self.logger.info("Using SQLite test database")
+            return  # Skip Redis and PostgreSQL setup
+            
+        # Production mode - use Redis and PostgreSQL
         try:
             self.redis = redis.from_url(redis_url)
             self.logger.info("Redis connection established")
@@ -116,41 +137,75 @@ class BabelAlgorithm:
 
     def log_error(self, error: Exception, context: Dict[str, Any] = None) -> None:
         """Log an error with context"""
+        if not context:
+            context = {}
+            
+        error_data = {
+            'error_type': error.__class__.__name__,
+            'error_message': str(error),
+            'context': json.dumps(context),
+            'timestamp': time.time()
+        }
+        
+        try:
+            if self.db:
+                self.cursor.execute(
+                    """
+                    INSERT INTO algorithm_errors 
+                    (algorithm_name, error_type, error_message, context, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.__class__.__name__,
+                        error_data['error_type'],
+                        error_data['error_message'],
+                        error_data['context'],
+                        error_data['timestamp']
+                    )
+                )
+                self.db.commit()
+        except Exception as e:
+            self.logger.error(f"Error logging to database: {e}")
+        
+        self.logger.error(f"Algorithm error: {error_data}")
         self.metrics.error_count += 1
         self.metrics.success_rate = max(
             0.0,
             1.0 - (self.metrics.error_count / max(1, self.metrics.cache_hits + self.metrics.cache_misses))
         )
-        
-        error_data = {
-            'error_type': type(error).__name__,
-            'error_message': str(error),
-            'context': context or {},
+
+    def log_warning(self, message: str, context: Dict[str, Any] = None) -> None:
+        """Log a warning with context"""
+        if not context:
+            context = {}
+            
+        warning_data = {
+            'message': message,
+            'context': json.dumps(context),
             'timestamp': time.time()
         }
         
-        self.logger.error(f"Algorithm error: {error_data}")
+        self.logger.warning(f"Algorithm warning: {warning_data}")
         
-        if self.db:
-            try:
-                with self.db.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO algorithm_errors 
-                        (algorithm_name, error_type, error_message, context, timestamp)
-                        VALUES (%s, %s, %s, %s, %s)
-                        """,
-                        (
-                            self.__class__.__name__,
-                            error_data['error_type'],
-                            error_data['error_message'],
-                            error_data['context'],
-                            error_data['timestamp']
-                        )
+        try:
+            if self.db:
+                self.cursor.execute(
+                    """
+                    INSERT INTO algorithm_errors 
+                    (algorithm_name, error_type, error_message, context, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.__class__.__name__,
+                        'WARNING',
+                        warning_data['message'],
+                        warning_data['context'],
+                        warning_data['timestamp']
                     )
-                    self.db.commit()
-            except Exception as e:
-                self.logger.error(f"Error logging to database: {e}")
+                )
+                self.db.commit()
+        except Exception as e:
+            self.logger.error(f"Error logging to database: {e}")
 
     def get_metrics(self) -> AlgorithmMetrics:
         """Get current algorithm metrics"""
@@ -171,11 +226,11 @@ class BabelAlgorithm:
         """Validate input data - to be implemented by child classes"""
         raise NotImplementedError
 
-    def process(self, data: Any) -> Any:
+    def process(self, data: Any) -> AlgorithmResponse:
         """Process data - to be implemented by child classes"""
         raise NotImplementedError
 
-    def execute(self, data: Any) -> Any:
+    def execute(self, data: Any) -> AlgorithmResponse:
         """Execute algorithm with timing and error handling"""
         if not self.validate_input(data):
             raise ValueError("Invalid input data")

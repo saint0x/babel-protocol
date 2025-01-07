@@ -1,214 +1,228 @@
 """
-Engagement Analytics Algorithm for Gossip Social Network
+Engagement Analytics Algorithm
 
-This algorithm implements a sophisticated engagement tracking and analysis system that measures
-and evaluates user interactions with content, focusing on quality of engagement over quantity.
-
-Core Philosophy:
-- Quality engagement over vanity metrics
-- Context-aware interaction analysis
-- Evidence-based participation rewards
-- Community value contribution tracking
-- Authenticity-weighted engagement scoring
-
-Key Features:
-1. Multi-dimensional engagement scoring
-2. Time-weighted interaction analysis
-3. Evidence-based engagement boost
-4. Context chain tracking
-5. User participation rewards
+This module implements engagement analysis to understand user interaction
+patterns and content performance metrics.
 """
 
-class EngagementAnalytics:
-    def __init__(self):
-        self.content_engagement = {}  # Maps content_id to engagement metrics
-        self.user_engagement = {}     # Maps user_id to engagement history
-        self.interaction_chains = {}  # Maps content_id to interaction chains
-        self.engagement_weights = {
-            'view': 1,
-            'like': 2,
-            'comment': 5,
-            'share': 3,
-            'evidence_addition': 8,
-            'context_addition': 6,
-            'quality_discussion': 10
-        }
+import time
+from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
+from collections import defaultdict
 
-    def record_interaction(self, content_id, user_id, interaction_type, interaction_data=None):
-        """
-        Record a user interaction with content
+from pydantic import BaseModel
+
+from .base import BaseAlgorithm, AlgorithmResponse
+
+class EngagementMetrics(BaseModel):
+    """Engagement metrics model"""
+    user_id: str
+    content_id: str
+    session_duration: int
+    scroll_depth: float
+    time_of_day: str
+    interaction_type: Optional[str] = 'view'  # Default to view
+    timestamp: float
+
+class EngagementSummary(BaseModel):
+    """Engagement summary model"""
+    total_sessions: int
+    avg_session_duration: float
+    avg_scroll_depth: float
+    peak_hours: List[int]
+    engagement_trend: Dict[str, float]
+    user_segments: Dict[str, int]
+    content_performance: Dict[str, Dict[str, float]]
+
+class EngagementAnalytics(BaseAlgorithm):
+    """Engagement analytics implementation"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.engagement_history: Dict[str, List[EngagementMetrics]] = {}
         
-        Parameters:
-        - interaction_type: type of interaction (view, like, comment, etc.)
-        - interaction_data: additional data about the interaction
-        """
-        # Initialize content engagement tracking if needed
-        if content_id not in self.content_engagement:
-            self.content_engagement[content_id] = {
-                'interactions': {},
-                'total_score': 0,
-                'quality_score': 0,
-                'engagement_rate': 0,
-                'interaction_chain': []
-            }
-
-        # Initialize user engagement tracking if needed
-        if user_id not in self.user_engagement:
-            self.user_engagement[user_id] = {
-                'interaction_history': [],
-                'engagement_score': 0,
-                'quality_contributions': 0
-            }
-
-        # Record the interaction
-        timestamp = self._get_current_timestamp()
-        interaction = {
-            'type': interaction_type,
-            'timestamp': timestamp,
-            'data': interaction_data,
-            'weight': self.engagement_weights.get(interaction_type, 1)
+        # Engagement thresholds
+        self.thresholds = {
+            'high_engagement': 0.8,
+            'medium_engagement': 0.5,
+            'low_engagement': 0.2
         }
-
-        # Update content engagement
-        if interaction_type not in self.content_engagement[content_id]['interactions']:
-            self.content_engagement[content_id]['interactions'][interaction_type] = []
-        self.content_engagement[content_id]['interactions'][interaction_type].append(interaction)
-
-        # Update user engagement history
-        self.user_engagement[user_id]['interaction_history'].append({
-            'content_id': content_id,
-            'interaction': interaction
+        
+        # Time window for trend analysis (in seconds)
+        self.trend_window = 24 * 60 * 60  # 24 hours
+    
+    def validate_input(self, data: Dict[str, Any]) -> bool:
+        """Validate input data"""
+        required_fields = {'engagement_data', 'time_window'}
+        return all(field in data for field in required_fields)
+    
+    def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
+        """Process engagement data and return analytics"""
+        # Parse engagement data
+        engagement_data = [
+            EngagementMetrics(**entry) if isinstance(entry, dict) else entry
+            for entry in data['engagement_data']
+        ]
+        time_window = data['time_window']
+        
+        # Update engagement history
+        for entry in engagement_data:
+            user_id = entry.user_id
+            if user_id not in self.engagement_history:
+                self.engagement_history[user_id] = []
+            self.engagement_history[user_id].append(entry)
+        
+        # Calculate engagement metrics
+        summary = self._analyze_engagement(engagement_data, time_window)
+        
+        return AlgorithmResponse(
+            algorithm_id='engagement_analytics_v1',
+            timestamp=time.time(),
+            results=[summary.dict()],
+            metrics=self.get_metrics().dict()
+        )
+    
+    def _analyze_engagement(self, engagement_data: List[EngagementMetrics],
+                          time_window: int) -> EngagementSummary:
+        """Analyze engagement patterns and generate summary"""
+        current_time = time.time()
+        window_start = current_time - time_window
+        
+        # Filter data within time window
+        recent_data = [
+            entry for entry in engagement_data
+            if entry.timestamp >= window_start
+        ]
+        
+        if not recent_data:
+            return EngagementSummary(
+                total_sessions=0,
+                avg_session_duration=0.0,
+                avg_scroll_depth=0.0,
+                peak_hours=[],
+                engagement_trend={},
+                user_segments={},
+                content_performance={}
+            )
+        
+        # Calculate basic metrics
+        total_sessions = len(recent_data)
+        avg_session_duration = sum(e.session_duration for e in recent_data) / total_sessions
+        avg_scroll_depth = sum(e.scroll_depth for e in recent_data) / total_sessions
+        
+        # Analyze peak hours
+        peak_hours = self._analyze_peak_hours(recent_data)
+        
+        # Calculate engagement trend
+        engagement_trend = self._calculate_trend(recent_data, time_window)
+        
+        # Segment users
+        user_segments = self._segment_users(recent_data)
+        
+        # Analyze content performance
+        content_performance = self._analyze_content_performance(recent_data)
+        
+        return EngagementSummary(
+            total_sessions=total_sessions,
+            avg_session_duration=avg_session_duration,
+            avg_scroll_depth=avg_scroll_depth,
+            peak_hours=peak_hours,
+            engagement_trend=engagement_trend,
+            user_segments=user_segments,
+            content_performance=content_performance
+        )
+    
+    def _analyze_peak_hours(self, engagement_data: List[EngagementMetrics]) -> List[int]:
+        """Analyze peak engagement hours"""
+        hour_counts = defaultdict(int)
+        
+        for entry in engagement_data:
+            hour = int(entry.time_of_day)
+            hour_counts[hour] += 1
+        
+        # Find hours with above-average engagement
+        avg_count = sum(hour_counts.values()) / max(1, len(hour_counts))
+        peak_hours = [
+            hour for hour, count in hour_counts.items()
+            if count > avg_count
+        ]
+        
+        return sorted(peak_hours)
+    
+    def _calculate_trend(self, engagement_data: List[EngagementMetrics],
+                        time_window: int) -> Dict[str, float]:
+        """Calculate engagement trends over time"""
+        # Split time window into 6 periods
+        period_length = time_window / 6
+        periods = defaultdict(list)
+        
+        for entry in engagement_data:
+            period_index = int((entry.timestamp % time_window) / period_length)
+            period_key = f"period_{period_index + 1}"
+            periods[period_key].append(entry)
+        
+        # Calculate average engagement per period
+        trend = {}
+        for period, entries in periods.items():
+            if entries:
+                avg_engagement = sum(e.scroll_depth * e.session_duration 
+                                  for e in entries) / len(entries)
+                trend[period] = avg_engagement
+            else:
+                trend[period] = 0.0
+        
+        return trend
+    
+    def _segment_users(self, engagement_data: List[EngagementMetrics]) -> Dict[str, int]:
+        """Segment users based on engagement levels"""
+        user_scores = defaultdict(list)
+        
+        for entry in engagement_data:
+            # Calculate engagement score
+            engagement_score = entry.scroll_depth * (entry.session_duration / 300)  # Normalize to 5 minutes
+            user_scores[entry.user_id].append(engagement_score)
+        
+        segments = {
+            'highly_engaged': 0,
+            'moderately_engaged': 0,
+            'low_engagement': 0
+        }
+        
+        for user_id, scores in user_scores.items():
+            avg_score = sum(scores) / len(scores)
+            if avg_score >= self.thresholds['high_engagement']:
+                segments['highly_engaged'] += 1
+            elif avg_score >= self.thresholds['medium_engagement']:
+                segments['moderately_engaged'] += 1
+            else:
+                segments['low_engagement'] += 1
+        
+        return segments
+    
+    def _analyze_content_performance(self, engagement_data: List[EngagementMetrics]) -> Dict[str, Dict[str, float]]:
+        """Analyze content performance metrics"""
+        content_metrics = defaultdict(lambda: {
+            'total_sessions': 0,
+            'avg_session_duration': 0.0,
+            'avg_scroll_depth': 0.0,
+            'engagement_score': 0.0
         })
-
-        # Recalculate scores
-        self._update_content_scores(content_id)
-        self._update_user_scores(user_id)
-
-    def _update_content_scores(self, content_id):
-        """
-        Update engagement scores for content based on:
-        1. Interaction weights
-        2. Time decay
-        3. Quality of interactions
-        4. Engagement patterns
-        """
-        content = self.content_engagement[content_id]
-        total_score = 0
-        quality_score = 0
-        interaction_count = 0
-
-        for interaction_type, interactions in content['interactions'].items():
-            type_weight = self.engagement_weights[interaction_type]
-            
-            for interaction in interactions:
-                time_factor = self._get_time_decay(interaction['timestamp'])
-                interaction_score = type_weight * time_factor
-                
-                # Add quality bonuses for certain interactions
-                if interaction['data'] and interaction['data'].get('quality_markers'):
-                    quality_bonus = self._calculate_quality_bonus(interaction['data']['quality_markers'])
-                    interaction_score *= (1 + quality_bonus)
-                
-                total_score += interaction_score
-                if interaction_type in ['comment', 'evidence_addition', 'context_addition']:
-                    quality_score += interaction_score
-                
-                interaction_count += 1
-
-        # Update content engagement metrics
-        content['total_score'] = total_score
-        content['quality_score'] = quality_score
-        content['engagement_rate'] = total_score / max(1, interaction_count)
-
-    def _update_user_scores(self, user_id):
-        """
-        Update engagement scores for user based on:
-        1. Interaction history
-        2. Quality of contributions
-        3. Consistency of engagement
-        """
-        user = self.user_engagement[user_id]
-        total_score = 0
-        quality_contributions = 0
-
-        for interaction_record in user['interaction_history']:
-            interaction = interaction_record['interaction']
-            time_factor = self._get_time_decay(interaction['timestamp'])
-            
-            # Calculate base score
-            interaction_score = interaction['weight'] * time_factor
-            
-            # Add quality bonuses
-            if interaction['data'] and interaction['data'].get('quality_markers'):
-                quality_bonus = self._calculate_quality_bonus(interaction['data']['quality_markers'])
-                interaction_score *= (1 + quality_bonus)
-                quality_contributions += quality_bonus
-            
-            total_score += interaction_score
-
-        # Update user engagement metrics
-        user['engagement_score'] = total_score
-        user['quality_contributions'] = quality_contributions
-
-    def get_content_analytics(self, content_id):
-        """
-        Get comprehensive analytics for content
-        Returns dict with various engagement metrics
-        """
-        if content_id not in self.content_engagement:
-            return {
-                'total_score': 0,
-                'quality_score': 0,
-                'engagement_rate': 0,
-                'interaction_counts': {}
-            }
-
-        content = self.content_engagement[content_id]
-        interaction_counts = {
-            itype: len(interactions)
-            for itype, interactions in content['interactions'].items()
-        }
-
-        return {
-            'total_score': content['total_score'],
-            'quality_score': content['quality_score'],
-            'engagement_rate': content['engagement_rate'],
-            'interaction_counts': interaction_counts
-        }
-
-    def get_user_analytics(self, user_id):
-        """
-        Get comprehensive analytics for user
-        Returns dict with various engagement metrics
-        """
-        if user_id not in self.user_engagement:
-            return {
-                'engagement_score': 0,
-                'quality_contributions': 0,
-                'interaction_count': 0
-            }
-
-        user = self.user_engagement[user_id]
-        return {
-            'engagement_score': user['engagement_score'],
-            'quality_contributions': user['quality_contributions'],
-            'interaction_count': len(user['interaction_history'])
-        }
-
-    def _calculate_quality_bonus(self, quality_markers):
-        """Calculate quality bonus based on interaction quality markers"""
-        # Quality markers might include: evidence provided, context added, 
-        # constructive discussion, etc.
-        bonus = sum(0.1 for marker in quality_markers if marker)
-        return min(0.5, bonus)  # Cap bonus at 50%
-
-    def _get_current_timestamp(self):
-        """Get current timestamp"""
-        import time
-        return time.time()
-
-    def _get_time_decay(self, timestamp):
-        """Calculate time decay factor for engagement"""
-        current_time = self._get_current_timestamp()
-        age_hours = (current_time - timestamp) / 3600
-        return max(0.2, 1.0 - (age_hours / 168))  # Decay over one week to 20% minimum 
+        
+        for entry in engagement_data:
+            metrics = content_metrics[entry.content_id]
+            metrics['total_sessions'] += 1
+            metrics['avg_session_duration'] += entry.session_duration
+            metrics['avg_scroll_depth'] += entry.scroll_depth
+            metrics['engagement_score'] += (
+                entry.scroll_depth * (entry.session_duration / 300)
+            )
+        
+        # Calculate averages
+        for content_id, metrics in content_metrics.items():
+            total = metrics['total_sessions']
+            if total > 0:
+                metrics['avg_session_duration'] /= total
+                metrics['avg_scroll_depth'] /= total
+                metrics['engagement_score'] /= total
+        
+        return dict(content_metrics) 

@@ -1,128 +1,261 @@
 """
-Source of Truth Consensus Algorithm for Gossip Social Network
+Source of Truth Consensus Algorithm
 
-This algorithm implements a sophisticated consensus mechanism that determines the perceived truth value
-of content based on community validation, user authenticity scores, and evidence provided.
-
-Core Philosophy:
-- Truth is fluid and collectively determined
-- Evidence and context enhance credibility
-- User authenticity scores influence truth determination
-- Community consensus shapes narrative validity
-
-Key Features:
-1. Weighted voting based on user authenticity scores
-2. Evidence-based truth amplification
-3. Time-decay for truth consensus
-4. Context chain validation
-5. Minority opinion preservation
+This module implements consensus mechanisms for determining source reliability
+and content authenticity through community validation.
 """
 
-class SourceOfTruthConsensus:
-    def __init__(self):
-        self.content_truth_scores = {}  # Maps content_id to truth score
-        self.user_votes = {}  # Maps content_id to {user_id: vote}
-        self.evidence_pool = {}  # Maps content_id to list of evidence
-        self.context_chains = {}  # Maps content_id to related context
+import time
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+import re
 
-    def submit_vote(self, content_id, user_id, vote_type, user_authenticity_score, evidence=None):
-        """
-        Submit a vote for content truth value
+from pydantic import BaseModel
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+
+from .base import BaseAlgorithm, AlgorithmResponse
+
+class ConsensusResult(BaseModel):
+    """Consensus result model"""
+    content_id: str
+    sources: List[Dict[str, Any]]
+    consensus_score: float
+    reliability_score: float
+    validation_count: int
+    timestamp: float
+
+class SourceOfTruthConsensus(BaseAlgorithm):
+    """Source of truth consensus implementation"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stop_words = set(stopwords.words('english'))
         
-        Parameters:
-        - vote_type: 'true', 'false', 'uncertain'
-        - user_authenticity_score: 0.0 to 1.0
-        - evidence: Optional supporting evidence/context
-        """
-        if content_id not in self.user_votes:
-            self.user_votes[content_id] = {}
-            self.content_truth_scores[content_id] = 0.5  # Initial neutral score
-            self.evidence_pool[content_id] = []
-
-        self.user_votes[content_id][user_id] = {
-            'vote': vote_type,
-            'weight': user_authenticity_score,
-            'timestamp': self._get_current_timestamp()
+        # Source reliability weights
+        self.source_weights = {
+            'official_docs': 1.0,    # Official documentation
+            'research_paper': 0.9,   # Academic research
+            'technical_blog': 0.8,   # Technical blog posts
+            'community_wiki': 0.7,   # Community wikis
+            'forum_post': 0.6,       # Forum discussions
+            'social_media': 0.4      # Social media posts
         }
-
-        if evidence:
-            self.evidence_pool[content_id].append({
-                'user_id': user_id,
-                'evidence': evidence,
-                'timestamp': self._get_current_timestamp()
+        
+        # Validation thresholds
+        self.validation_thresholds = {
+            'high': 0.8,
+            'medium': 0.6,
+            'low': 0.4
+        }
+        
+        # Content similarity threshold
+        self.similarity_threshold = 0.7
+    
+    def validate_input(self, data: Dict[str, Any]) -> bool:
+        """Validate input data"""
+        required_fields = {'content_id', 'sources'}
+        return all(field in data for field in required_fields)
+    
+    def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
+        """Process sources and return consensus results"""
+        content_id = data['content_id']
+        sources = data['sources']
+        
+        # Calculate consensus metrics
+        consensus_score = self._calculate_consensus(sources)
+        reliability_score = self._calculate_reliability(sources)
+        validation_count = len(sources)
+        
+        result = ConsensusResult(
+            content_id=content_id,
+            sources=sources,
+            consensus_score=consensus_score,
+            reliability_score=reliability_score,
+            validation_count=validation_count,
+            timestamp=time.time()
+        )
+        
+        return AlgorithmResponse(
+            algorithm_id='source_consensus_v1',
+            timestamp=time.time(),
+            results=[result.dict()],
+            metrics=self.get_metrics().dict()
+        )
+    
+    def _calculate_consensus(self, sources: List[Dict[str, Any]]) -> float:
+        """Calculate consensus score based on source agreement"""
+        if not sources:
+            return 0.0
+        
+        # Extract key information from each source
+        source_info = []
+        for source in sources:
+            content = source['content']
+            text = content.get('text', '')
+            
+            # Extract key terms and facts
+            key_terms = self._extract_key_terms(text)
+            facts = self._extract_facts(text)
+            
+            source_info.append({
+                'key_terms': key_terms,
+                'facts': facts,
+                'weight': self.source_weights.get(source['source'], 0.5)
             })
-
-        self._recalculate_truth_score(content_id)
-
-    def _recalculate_truth_score(self, content_id):
-        """
-        Recalculate truth score based on:
-        1. Weighted user votes
-        2. Evidence quality
-        3. Time decay
-        4. Context chain strength
-        """
-        votes = self.user_votes[content_id]
-        evidence = self.evidence_pool[content_id]
         
-        # Calculate base score from weighted votes
-        total_weight = 0
-        weighted_score = 0
+        # Calculate agreement scores
+        term_agreement = self._calculate_term_agreement(
+            [info['key_terms'] for info in source_info]
+        )
         
-        for vote_data in votes.values():
-            vote_weight = vote_data['weight']
-            vote_age = self._get_time_decay(vote_data['timestamp'])
+        fact_agreement = self._calculate_fact_agreement(
+            [info['facts'] for info in source_info]
+        )
+        
+        # Weight the scores by source reliability
+        weights = [info['weight'] for info in source_info]
+        weighted_score = (
+            0.4 * term_agreement +
+            0.6 * fact_agreement
+        ) * sum(weights) / len(weights)
+        
+        return min(1.0, weighted_score)
+    
+    def _calculate_reliability(self, sources: List[Dict[str, Any]]) -> float:
+        """Calculate overall reliability score of sources"""
+        if not sources:
+            return 0.0
+        
+        reliability_scores = []
+        for source in sources:
+            # Get base reliability from source type
+            base_reliability = self.source_weights.get(source['source'], 0.5)
             
-            if vote_data['vote'] == 'true':
-                weighted_score += vote_weight * vote_age
-            elif vote_data['vote'] == 'false':
-                weighted_score -= vote_weight * vote_age
+            # Adjust based on content quality
+            content = source['content']
+            quality_score = content.get('analysis', {}).get('quality_score', 0.5)
             
-            total_weight += vote_weight * vote_age
-
-        base_score = 0.5 + (weighted_score / (2 * total_weight)) if total_weight > 0 else 0.5
-
-        # Adjust score based on evidence
-        evidence_bonus = min(0.2, len(evidence) * 0.05)  # Max 20% boost from evidence
+            # Adjust based on evidence strength
+            evidence_score = content.get('analysis', {}).get('evidence', {}).get('strength_score', 0.5)
+            
+            # Calculate final reliability
+            reliability = (
+                0.4 * base_reliability +
+                0.3 * quality_score +
+                0.3 * evidence_score
+            )
+            reliability_scores.append(reliability)
         
-        # Final truth score
-        self.content_truth_scores[content_id] = min(1.0, base_score + evidence_bonus)
-
-    def get_truth_consensus(self, content_id):
-        """
-        Get the current truth consensus for content
-        Returns:
-        - truth_score: 0.0 to 1.0
-        - confidence: 0.0 to 1.0
-        - evidence_count: int
-        """
-        if content_id not in self.content_truth_scores:
-            return {
-                'truth_score': 0.5,
-                'confidence': 0.0,
-                'evidence_count': 0
-            }
-
-        truth_score = self.content_truth_scores[content_id]
-        vote_count = len(self.user_votes[content_id])
-        evidence_count = len(self.evidence_pool[content_id])
-
-        # Calculate confidence based on number of votes and evidence
-        confidence = min(1.0, (vote_count / 10) + (evidence_count / 5))
-
-        return {
-            'truth_score': truth_score,
-            'confidence': confidence,
-            'evidence_count': evidence_count
-        }
-
-    def _get_current_timestamp(self):
-        """Placeholder for getting current timestamp"""
-        import time
-        return time.time()
-
-    def _get_time_decay(self, timestamp):
-        """Calculate time decay factor for votes"""
-        current_time = self._get_current_timestamp()
-        age_hours = (current_time - timestamp) / 3600
-        return max(0.2, 1.0 - (age_hours / 168))  # Decay over one week to 20% minimum 
+        # Return weighted average
+        return sum(reliability_scores) / len(reliability_scores)
+    
+    def _extract_key_terms(self, text: str) -> List[str]:
+        """Extract key terms from text"""
+        # Split on whitespace and punctuation
+        words = re.findall(r'\b\w+\b', text.lower())
+        words = [w for w in words if w not in self.stop_words and len(w) > 2]
+        
+        # Count term frequencies
+        term_freq = {}
+        for word in words:
+            term_freq[word] = term_freq.get(word, 0) + 1
+        
+        # Select top terms
+        sorted_terms = sorted(
+            term_freq.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        return [term for term, _ in sorted_terms[:10]]
+    
+    def _extract_facts(self, text: str) -> List[str]:
+        """Extract factual statements from text"""
+        # Split into sentences
+        sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
+        
+        facts = []
+        fact_indicators = [
+            'is', 'are', 'was', 'were', 'has', 'have',
+            'can', 'will', 'must', 'should'
+        ]
+        
+        for sentence in sentences:
+            # Split on whitespace and punctuation
+            words = re.findall(r'\b\w+\b', sentence.lower())
+            # Check if sentence contains fact indicators
+            if any(indicator in words for indicator in fact_indicators):
+                facts.append(sentence)
+        
+        return facts
+    
+    def _calculate_term_agreement(self, term_lists: List[List[str]]) -> float:
+        """Calculate agreement score for key terms"""
+        if not term_lists:
+            return 0.0
+        
+        # Create term frequency map
+        term_freq = {}
+        total_sources = len(term_lists)
+        
+        for terms in term_lists:
+            for term in set(terms):  # Use set to count each term once per source
+                term_freq[term] = term_freq.get(term, 0) + 1
+        
+        # Calculate agreement scores
+        agreement_scores = []
+        for freq in term_freq.values():
+            agreement = freq / total_sources
+            if agreement >= self.similarity_threshold:
+                agreement_scores.append(agreement)
+        
+        if not agreement_scores:
+            return 0.0
+        
+        return sum(agreement_scores) / len(agreement_scores)
+    
+    def _calculate_fact_agreement(self, fact_lists: List[List[str]]) -> float:
+        """Calculate agreement score for facts"""
+        if not fact_lists:
+            return 0.0
+        
+        # Compare each fact with facts from other sources
+        agreement_scores = []
+        total_sources = len(fact_lists)
+        
+        for i, facts1 in enumerate(fact_lists):
+            for fact1 in facts1:
+                agreements = 0
+                for j, facts2 in enumerate(fact_lists):
+                    if i != j:  # Don't compare with self
+                        # Check if any fact in facts2 is similar
+                        if any(self._calculate_fact_similarity(fact1, fact2) >= self.similarity_threshold
+                              for fact2 in facts2):
+                            agreements += 1
+                
+                if agreements > 0:  # Only count facts with some agreement
+                    agreement_scores.append(agreements / (total_sources - 1))
+        
+        if not agreement_scores:
+            return 0.0
+        
+        return sum(agreement_scores) / len(agreement_scores)
+    
+    def _calculate_fact_similarity(self, fact1: str, fact2: str) -> float:
+        """Calculate similarity between two facts"""
+        # Convert to sets of words (excluding stop words)
+        words1 = set(re.findall(r'\b\w+\b', fact1.lower()))
+        words2 = set(re.findall(r'\b\w+\b', fact2.lower()))
+        words1 = words1 - self.stop_words
+        words2 = words2 - self.stop_words
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        
+        return intersection / union 
