@@ -1,41 +1,49 @@
-package api
+package websocket
 
 import (
-	"encoding/json"
 	"log"
+	"net/http"
 	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
-// WebSocketHub maintains active connections and broadcasts messages
+// WebSocketHub maintains the set of active clients and broadcasts messages to them
 type WebSocketHub struct {
 	clients    map[*WebSocketClient]bool
 	broadcast  chan []byte
 	register   chan *WebSocketClient
 	unregister chan *WebSocketClient
-	mu         sync.RWMutex
+	mu         sync.Mutex
 }
 
-// WebSocketClient represents a connected client
+// WebSocketClient is a middleman between the websocket connection and the hub
 type WebSocketClient struct {
 	hub  *WebSocketHub
 	conn *websocket.Conn
 	send chan []byte
 }
 
-// NewWebSocketHub creates a new WebSocket hub
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for now
+	},
+}
+
+// NewWebSocketHub creates a new WebSocketHub
 func NewWebSocketHub() *WebSocketHub {
 	return &WebSocketHub{
-		clients:    make(map[*WebSocketClient]bool),
 		broadcast:  make(chan []byte),
 		register:   make(chan *WebSocketClient),
 		unregister: make(chan *WebSocketClient),
+		clients:    make(map[*WebSocketClient]bool),
 	}
 }
 
-// Run starts the WebSocket hub
+// Run starts the WebSocketHub
 func (h *WebSocketHub) Run() {
 	for {
 		select {
@@ -43,7 +51,6 @@ func (h *WebSocketHub) Run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
-
 		case client := <-h.unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
@@ -51,9 +58,8 @@ func (h *WebSocketHub) Run() {
 				close(client.send)
 			}
 			h.mu.Unlock()
-
 		case message := <-h.broadcast:
-			h.mu.RLock()
+			h.mu.Lock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
@@ -62,40 +68,13 @@ func (h *WebSocketHub) Run() {
 					delete(h.clients, client)
 				}
 			}
-			h.mu.RUnlock()
+			h.mu.Unlock()
 		}
 	}
 }
 
-// BroadcastUpdate sends an update to all connected clients
-func (h *WebSocketHub) BroadcastUpdate(updateType string, data interface{}) {
-	update := struct {
-		Type string      `json:"type"`
-		Data interface{} `json:"data"`
-	}{
-		Type: updateType,
-		Data: data,
-	}
-
-	message, err := json.Marshal(update)
-	if err != nil {
-		log.Printf("Error marshaling update: %v", err)
-		return
-	}
-
-	h.broadcast <- message
-}
-
-// HandleWebSocket handles WebSocket connections
+// HandleWebSocket handles websocket requests from clients
 func (h *WebSocketHub) HandleWebSocket(c *gin.Context) {
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin: func(r *gin.Request) bool {
-			return true // TODO: Implement proper origin checking
-		},
-	}
-
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("Error upgrading connection: %v", err)
@@ -107,33 +86,14 @@ func (h *WebSocketHub) HandleWebSocket(c *gin.Context) {
 		conn: conn,
 		send: make(chan []byte, 256),
 	}
-
 	client.hub.register <- client
 
+	// Start goroutines for reading and writing
 	go client.writePump()
 	go client.readPump()
 }
 
-// readPump pumps messages from the WebSocket connection to the hub
-func (c *WebSocketClient) readPump() {
-	defer func() {
-		c.hub.unregister <- c
-		c.conn.Close()
-	}()
-
-	for {
-		_, _, err := c.conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("Error reading message: %v", err)
-			}
-			break
-		}
-		// Handle incoming messages if needed
-	}
-}
-
-// writePump pumps messages from the hub to the WebSocket connection
+// writePump pumps messages from the hub to the websocket connection
 func (c *WebSocketClient) writePump() {
 	defer func() {
 		c.conn.Close()
@@ -143,19 +103,34 @@ func (c *WebSocketClient) writePump() {
 		select {
 		case message, ok := <-c.send:
 			if !ok {
+				// The hub closed the channel
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				return
-			}
-			w.Write(message)
-
-			if err := w.Close(); err != nil {
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
 			}
 		}
+	}
+}
+
+// readPump pumps messages from the websocket connection to the hub
+func (c *WebSocketClient) readPump() {
+	defer func() {
+		c.hub.unregister <- c
+		c.conn.Close()
+	}()
+
+	for {
+		_, message, err := c.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("error: %v", err)
+			}
+			break
+		}
+
+		c.hub.broadcast <- message
 	}
 }
