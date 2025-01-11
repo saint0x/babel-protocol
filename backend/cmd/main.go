@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"babel-protocol/backend/internal/websocket"
+	"github.com/saint/babel-protocol/backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 )

@@ -1,297 +1,339 @@
 """
-Content Recommendation Algorithm
+Enhanced Content Recommendation System
 
-This module implements personalized content recommendations based on user preferences,
-content features, and engagement patterns.
+This module implements a content recommendation system that combines collaborative 
+filtering, content-based filtering, and feedback loop optimization.
 """
 
 import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 from pydantic import BaseModel
 
-from .base import BaseAlgorithm, AlgorithmResponse
+from .base import BaseAlgorithm, AlgorithmResponse, AlgorithmMetrics
+
+class UserProfile(BaseModel):
+    """User profile for recommendation"""
+    user_id: str
+    interests: List[str]
+    expertise_areas: List[str]
+    engagement_history: List[Dict[str, Any]]
+    feature_vector: Optional[List[float]] = None
+    
+class ContentVector(BaseModel):
+    """Content vector for recommendation"""
+    content_id: str
+    topics: List[str]
+    complexity_level: float
+    feature_vector: List[float]
 
 class RecommendationScore(BaseModel):
     """Recommendation score model"""
     content_id: str
-    score: float
     relevance_score: float
     engagement_score: float
     authenticity_score: float
     temporal_score: float
+    collaborative_score: float
+    final_score: float
+    confidence: float
+    timestamp: float
 
 class ContentRecommendationSystem(BaseAlgorithm):
-    """Content recommendation system implementation"""
+    """Enhanced content recommendation system implementation"""
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.content_store: Dict[str, Dict[str, Any]] = {}
-        self.user_profiles: Dict[str, Dict[str, Any]] = {}
+        self.user_profiles: Dict[str, UserProfile] = {}
+        self.content_vectors: Dict[str, ContentVector] = {}
+        self.feedback_history: Dict[str, List[Dict[str, Any]]] = {}
         
         # Recommendation weights
         self.weights = {
-            'relevance': 0.4,
-            'engagement': 0.3,
+            'relevance': 0.3,
+            'engagement': 0.2,
             'authenticity': 0.2,
-            'temporal': 0.1
+            'temporal': 0.15,
+            'collaborative': 0.15
         }
+    
+        # Learning rate for weight adjustments
+        self.learning_rate = 0.1
+        self.min_confidence = 0.6
     
     def validate_input(self, data: Dict[str, Any]) -> bool:
         """Validate input data"""
-        if 'content_id' in data:  # Adding content
-            required_fields = {'content_id', 'text', 'timestamp'}
-        else:  # Getting recommendations
-            required_fields = {'user_id', 'user_profile'}
+        if 'feedback_id' in data:
+            required_fields = {'feedback_id', 'algorithm_id', 'feedback_type', 'feedback_data'}
+        else:
+            required_fields = {'user_id', 'content_pool', 'user_history'}
         return all(field in data for field in required_fields)
     
-    def add_content(self, content_id: str, text: str, timestamp: float,
-                   authenticity_score: float, metadata: Dict[str, Any]) -> None:
-        """Add or update content in the recommendation system"""
-        self.content_store[content_id] = {
-            'text': text,
-            'timestamp': timestamp,
-            'authenticity_score': authenticity_score,
-            'metadata': metadata
-        }
+    def add_user(self, user_id: str, interests: List[str], expertise_areas: List[str]) -> None:
+        """Add or update user profile"""
+        self.user_profiles[user_id] = UserProfile(
+            user_id=user_id,
+            interests=interests,
+            expertise_areas=expertise_areas,
+            engagement_history=[],
+            feature_vector=self._create_user_vector(interests, expertise_areas)
+        )
+    
+    def add_content(self, content_id: str, topics: List[str], complexity_level: float) -> None:
+        """Add or update content vector"""
+        self.content_vectors[content_id] = ContentVector(
+            content_id=content_id,
+            topics=topics,
+            complexity_level=complexity_level,
+            feature_vector=self._create_content_vector(topics, complexity_level)
+        )
+    
+    def record_interaction(self, user_id: str, content_id: str, interaction_type: str, 
+                         metrics: Dict[str, Any]) -> None:
+        """Record user-content interaction"""
+        if user_id in self.user_profiles:
+            interaction = {
+                'content_id': content_id,
+                'type': interaction_type,
+                'metrics': metrics,
+                'timestamp': time.time()
+            }
+            self.user_profiles[user_id].engagement_history.append(interaction)
     
     def process(self, data: Dict[str, Any]) -> AlgorithmResponse:
-        """Process user profile and return personalized recommendations"""
-        try:
-            mode = data.get('mode', 'personalized')
-            
-            if mode == 'similar_content':
-                if 'content_id' not in data:
-                    raise ValueError("content_id required for similar_content mode")
-                    
-                # Add content to store if not exists
-                if 'text' in data:
+        """Process recommendation request"""
+        if 'feedback_id' in data:
+            return self._process_feedback(data)
+        
+        user_id = data['user_id']
+        content_pool = data['content_pool']
+        user_history = data.get('user_history', [])
+        
+        # Get user profile or create temporary one
+        user_profile = self.user_profiles.get(user_id)
+        if not user_profile:
+            user_profile = self._create_temporary_profile(user_history)
+        
+        recommendations = []
+        for content in content_pool:
+            if content['id'] not in self.content_vectors:
                     self.add_content(
-                        data['content_id'],
-                        data['text'],
-                        data.get('timestamp', time.time()),
-                        data.get('authenticity_score', 0.5),
-                        data.get('metadata', {})
-                    )
-                
-                # Find similar content
-                recommendations = self._find_similar_content(data['content_id'])
-            else:  # personalized mode
-                if 'user_id' not in data or 'user_profile' not in data:
-                    raise ValueError("user_id and user_profile required for personalized mode")
-                
-                # Update user profile
-                self.user_profiles[data['user_id']] = data['user_profile']
-                
-                # Generate personalized recommendations
-                recommendations = self._generate_recommendations(data['user_id'])
+                    content['id'],
+                    content.get('topics', []),
+                    content.get('complexity_level', 0.5)
+                )
+            
+            score = self._calculate_recommendation_score(user_profile, content)
+            recommendations.append(score)
+        
+        # Sort by final score
+        recommendations.sort(key=lambda x: x.final_score, reverse=True)
             
             return AlgorithmResponse(
-                algorithm_id='content_recommendation_v1',
+            algorithm_id='content_recommendation_v2',
                 timestamp=time.time(),
-                results=recommendations,
-                metrics=self.get_metrics().dict()
-            )
-        except Exception as e:
-            return AlgorithmResponse(
-                algorithm_id='content_recommendation_v1',
-                timestamp=time.time(),
-                results=[{
-                    'error': str(e),
-                    'content_id': data.get('content_id', 'unknown')
-                }],
+            results=[r.dict() for r in recommendations],
                 metrics=self.get_metrics().dict()
             )
     
-    def _generate_recommendations(self, user_id: str) -> List[Dict[str, Any]]:
-        """Generate personalized recommendations for user"""
-        if not self.content_store:
-            return []
+    def _process_feedback(self, data: Dict[str, Any]) -> AlgorithmResponse:
+        """Process feedback and optimize weights"""
+        feedback_data = data['feedback_data']
+        user_id = feedback_data.get('user_id', 'default')
         
-        user_profile = self.user_profiles.get(user_id, {})
-        current_time = time.time()
-        scores = []
+        if user_id not in self.feedback_history:
+            self.feedback_history[user_id] = []
         
-        for content_id, content in self.content_store.items():
-            # Calculate relevance score
-            relevance_score = self._calculate_relevance(
-                content['text'],
-                content['metadata'],
-                user_profile.get('interests', []),
-                user_profile.get('expertise_areas', [])
-            )
-            
-            # Calculate engagement score
-            engagement_score = self._calculate_engagement(
-                content_id,
-                user_profile.get('engagement_patterns', {})
-            )
-            
-            # Get authenticity score
-            authenticity_score = content['authenticity_score']
-            
-            # Calculate temporal score
-            temporal_score = self._calculate_temporal_score(
-                content['timestamp'],
-                current_time
-            )
+        self.feedback_history[user_id].append(feedback_data)
+        
+        # Update weights based on feedback
+        self._update_weights(user_id)
+        
+        return AlgorithmResponse(
+            algorithm_id='content_recommendation_v2',
+            timestamp=time.time(),
+            results=[{'status': 'feedback_processed'}],
+            metrics=self.get_metrics().dict()
+        )
+    
+    def _create_user_vector(self, interests: List[str], expertise_areas: List[str]) -> List[float]:
+        """Create user feature vector"""
+        # Implementation details for creating user vector
+        return [0.5] * 100  # Placeholder implementation
+    
+    def _create_content_vector(self, topics: List[str], complexity_level: float) -> List[float]:
+        """Create content feature vector"""
+        # Implementation details for creating content vector
+        return [0.5] * 100  # Placeholder implementation
+    
+    def _calculate_recommendation_score(self, user: UserProfile, content: Dict[str, Any]) -> RecommendationScore:
+        """Calculate comprehensive recommendation score"""
+        content_id = content['id']
+        content_vector = self.content_vectors[content_id]
+        
+        # Calculate individual scores
+        relevance_score = self._calculate_relevance_score(user, content_vector)
+        engagement_score = self._calculate_engagement_score(user, content)
+        authenticity_score = content.get('authenticity_score', 0.5)
+        temporal_score = self._calculate_temporal_score(content)
+        collaborative_score = self._calculate_collaborative_score(user, content_id)
             
             # Calculate final score
             final_score = (
                 self.weights['relevance'] * relevance_score +
                 self.weights['engagement'] * engagement_score +
                 self.weights['authenticity'] * authenticity_score +
-                self.weights['temporal'] * temporal_score
+            self.weights['temporal'] * temporal_score +
+            self.weights['collaborative'] * collaborative_score
             )
             
-            scores.append(RecommendationScore(
+        # Calculate confidence
+        confidence = self._calculate_confidence(user, content)
+        
+        return RecommendationScore(
                 content_id=content_id,
-                score=final_score,
                 relevance_score=relevance_score,
                 engagement_score=engagement_score,
                 authenticity_score=authenticity_score,
-                temporal_score=temporal_score
+            temporal_score=temporal_score,
+            collaborative_score=collaborative_score,
+            final_score=final_score,
+            confidence=confidence,
+            timestamp=time.time()
+        )
+    
+    def _calculate_relevance_score(self, user: UserProfile, content: ContentVector) -> float:
+        """Calculate content relevance score"""
+        if user.feature_vector and content.feature_vector:
+            similarity = cosine_similarity(
+                [user.feature_vector], 
+                [content.feature_vector]
+            )[0][0]
+            return float(similarity)
+        return 0.5
+    
+    def _calculate_engagement_score(self, user: UserProfile, content: Dict[str, Any]) -> float:
+        """Calculate predicted engagement score"""
+        # Implementation details for engagement score
+        return 0.5  # Placeholder implementation
+    
+    def _calculate_temporal_score(self, content: Dict[str, Any]) -> float:
+        """Calculate temporal relevance score"""
+        # Implementation details for temporal score
+        return 0.5  # Placeholder implementation
+    
+    def _calculate_collaborative_score(self, user: UserProfile, content_id: str) -> float:
+        """Calculate collaborative filtering score"""
+        similar_users = self._find_similar_users(user)
+        if not similar_users:
+            return 0.5
+            
+        total_score = 0.0
+        total_weight = 0.0
+        
+        for similar_user, similarity in similar_users:
+            # Check if similar user has interacted with content
+            for interaction in similar_user.engagement_history:
+                if interaction['content_id'] == content_id:
+                    interaction_score = interaction['metrics'].get('engagement_score', 0.5)
+                    total_score += similarity * interaction_score
+                    total_weight += similarity
+        
+        if total_weight > 0:
+            return total_score / total_weight
+        return 0.5
+    
+    def _find_similar_users(self, user: UserProfile, k: int = 5) -> List[tuple]:
+        """Find k most similar users"""
+        if not user.feature_vector:
+            return []
+            
+        similarities = []
+        for other_id, other_user in self.user_profiles.items():
+            if other_id != user.user_id and other_user.feature_vector:
+                similarity = cosine_similarity(
+                    [user.feature_vector], 
+                    [other_user.feature_vector]
+                )[0][0]
+                similarities.append((other_user, float(similarity)))
+        
+        # Sort by similarity and return top k
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        return similarities[:k]
+    
+    def _calculate_confidence(self, user: UserProfile, content: Dict[str, Any]) -> float:
+        """Calculate confidence score for recommendation"""
+        # Factors affecting confidence:
+        # 1. User profile completeness
+        # 2. Content vector quality
+        # 3. Feedback history
+        # 4. Similar user interactions
+        
+        base_confidence = 0.6
+        
+        # User profile factor
+        if user.interests and user.expertise_areas:
+            base_confidence += 0.1
+        
+        # Content vector factor
+        content_vector = self.content_vectors.get(content['id'])
+        if content_vector and content_vector.topics:
+            base_confidence += 0.1
+        
+        # Feedback history factor
+        user_id = user.user_id
+        if user_id in self.feedback_history and self.feedback_history[user_id]:
+            base_confidence += 0.1
+        
+        # Similar user interactions factor
+        similar_users = self._find_similar_users(user)
+        if similar_users:
+            base_confidence += 0.1
+        
+        return min(0.95, base_confidence)
+    
+    def _update_weights(self, user_id: str) -> None:
+        """Update recommendation weights based on feedback"""
+        if user_id not in self.feedback_history:
+            return
+            
+        feedback_history = self.feedback_history[user_id]
+        if not feedback_history:
+            return
+            
+        # Calculate weight adjustments based on feedback
+        weight_adjustments = {k: 0.0 for k in self.weights}
+        total_feedback = len(feedback_history)
+        
+        for feedback in feedback_history:
+            metrics = feedback.get('metrics', {})
+            
+            # Adjust weights based on engagement metrics
+            if 'engagement_score' in metrics:
+                weight_adjustments['engagement'] += (
+                    metrics['engagement_score'] - 0.5
+                ) * self.learning_rate
+            
+            # Adjust weights based on relevance feedback
+            if 'relevance_feedback' in metrics:
+                weight_adjustments['relevance'] += (
+                    metrics['relevance_feedback'] - 0.5
+                ) * self.learning_rate
+            
+            # Adjust weights based on authenticity feedback
+            if 'authenticity_feedback' in metrics:
+                weight_adjustments['authenticity'] += (
+                    metrics['authenticity_feedback'] - 0.5
+                ) * self.learning_rate
+        
+        # Apply adjustments and normalize
+        for key in self.weights:
+            self.weights[key] = max(0.1, min(0.4, 
+                self.weights[key] + weight_adjustments[key] / total_feedback
             ))
         
-        # Sort by score and return top recommendations
-        scores.sort(key=lambda x: x.score, reverse=True)
-        return [score.dict() for score in scores[:10]]  # Return top 10
-    
-    def _calculate_relevance(self, text: str, metadata: Dict[str, Any],
-                           interests: List[str], expertise_areas: List[str]) -> float:
-        """Calculate content relevance based on user interests and expertise"""
-        if not interests and not expertise_areas:
-            return 0.5  # Default score
-        
-        try:
-            # Preprocess text content
-            processed_text = text.lower() if isinstance(text, str) else ""
-            processed_metadata = str(metadata).lower()
-            
-            # Calculate interest match
-            interest_match = sum(
-                1 for interest in interests
-                if interest.lower() in processed_text or
-                interest.lower() in processed_metadata
-            ) / max(1, len(interests))
-            
-            # Calculate expertise match
-            expertise_match = sum(
-                1 for area in expertise_areas
-                if area.lower() in processed_text or
-                area.lower() in processed_metadata
-            ) / max(1, len(expertise_areas))
-            
-            # Combine scores with weights
-            return 0.7 * interest_match + 0.3 * expertise_match
-        except (AttributeError, TypeError):
-            return 0.5  # Default score if text processing fails
-    
-    def _calculate_engagement(self, content_id: str, engagement_patterns: Dict[str, Any]) -> float:
-        """Calculate predicted engagement score based on user patterns"""
-        if not engagement_patterns:
-            return 0.5  # Default score
-        
-        # Get content complexity
-        content = self.content_store[content_id]
-        content_complexity = content['metadata'].get('complexity_level', 0.5)
-        
-        # Calculate time-of-day match
-        current_hour = datetime.now().hour
-        active_hours = engagement_patterns.get('active_hours', [])
-        time_match = 1.0 if current_hour in active_hours else 0.5
-        
-        # Calculate complexity match
-        user_complexity_preference = engagement_patterns.get('preferred_complexity', 0.5)
-        complexity_match = 1.0 - abs(content_complexity - user_complexity_preference)
-        
-        # Combine factors
-        return 0.6 * complexity_match + 0.4 * time_match
-    
-    def _calculate_temporal_score(self, content_timestamp: float, current_time: float) -> float:
-        """Calculate temporal relevance score"""
-        age_hours = (current_time - content_timestamp) / 3600
-        
-        if age_hours < 24:  # Last 24 hours
-            return 1.0
-        elif age_hours < 72:  # 1-3 days
-            return 0.8
-        elif age_hours < 168:  # 3-7 days
-            return 0.6
-        elif age_hours < 720:  # 7-30 days
-            return 0.4
-        else:
-            return 0.2  # Older than 30 days 
-    
-    def _find_similar_content(self, content_id: str) -> List[Dict[str, Any]]:
-        """Find content similar to the given content_id"""
-        if content_id not in self.content_store:
-            return []
-        
-        target_content = self.content_store[content_id]
-        scores = []
-        
-        for other_id, other_content in self.content_store.items():
-            if other_id == content_id:
-                continue
-            
-            # Calculate text similarity if text exists
-            text_similarity = 0.0
-            if isinstance(target_content.get('text', ''), str) and isinstance(other_content.get('text', ''), str):
-                text_similarity = self._calculate_text_similarity(
-                    target_content['text'],
-                    other_content['text']
-                )
-            
-            # Calculate metadata similarity
-            metadata_similarity = self._calculate_metadata_similarity(
-                target_content.get('metadata', {}),
-                other_content.get('metadata', {})
-            )
-            
-            # Calculate final similarity score
-            similarity_score = 0.7 * text_similarity + 0.3 * metadata_similarity
-            
-            scores.append({
-                'content_id': other_id,
-                'score': similarity_score,
-                'similarity_score': similarity_score
-            })
-        
-        # Sort by similarity score
-        scores.sort(key=lambda x: x['score'], reverse=True)
-        return scores[:10]  # Return top 10 similar items
-    
-    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
-        """Calculate similarity between two text strings"""
-        # Convert to sets of words
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        # Calculate Jaccard similarity
-        intersection = len(words1.intersection(words2))
-        union = len(words1.union(words2))
-        
-        return intersection / union if union > 0 else 0.0
-    
-    def _calculate_metadata_similarity(self, metadata1: Dict[str, Any], metadata2: Dict[str, Any]) -> float:
-        """Calculate similarity between content metadata"""
-        # Extract comparable fields
-        fields1 = {str(k): str(v) for k, v in metadata1.items()}
-        fields2 = {str(k): str(v) for k, v in metadata2.items()}
-        
-        # Calculate field overlap
-        common_keys = set(fields1.keys()).intersection(fields2.keys())
-        if not common_keys:
-            return 0.0
-        
-        # Calculate similarity for each common field
-        similarities = []
-        for key in common_keys:
-            if fields1[key] == fields2[key]:
-                similarities.append(1.0)
-            else:
-                similarities.append(0.0)
-        
-        return sum(similarities) / len(similarities) 
+        # Normalize to sum to 1
+        total_weight = sum(self.weights.values())
+        self.weights = {k: v/total_weight for k, v in self.weights.items()} 

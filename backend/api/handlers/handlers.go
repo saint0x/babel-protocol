@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"time"
 
-	"babel-protocol/backend/api/models"
-	"babel-protocol/backend/internal/websocket"
+	"github.com/saint/babel-protocol/backend/api/models"
+	"github.com/saint/babel-protocol/backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 )
@@ -42,8 +44,44 @@ func VoteContentHandler(hub *websocket.WebSocketHub) gin.HandlerFunc {
 			return
 		}
 
-		// TODO: Implement voting logic
-		c.JSON(http.StatusOK, gin.H{"id": id, "vote": vote})
+		// Validate vote type and certainty level
+		if err := vote.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Set default weight if not provided
+		if vote.Weight == 0 {
+			vote.Weight = 1.0
+		}
+
+		// Set vote metadata
+		vote.ContentID = id
+		vote.UserID = c.GetString("user_id") // Assuming user ID is set in auth middleware
+		vote.Timestamp = time.Now()
+		vote.LastUpdated = time.Now()
+
+		// TODO: Save vote to database and process it
+		// For now, just return success
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Vote recorded successfully",
+			"vote":    vote,
+		})
+
+		// Notify websocket clients about the vote
+		if hub != nil {
+			message := map[string]interface{}{
+				"type": "vote",
+				"data": map[string]interface{}{
+					"content_id": id,
+					"vote_type":  vote.Type,
+					"user_id":    vote.UserID,
+				},
+			}
+			if jsonData, err := json.Marshal(message); err == nil {
+				hub.Broadcast(jsonData)
+			}
+		}
 	}
 }
 

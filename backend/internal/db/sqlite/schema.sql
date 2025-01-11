@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS content (
     content_text TEXT NOT NULL,
     media_urls TEXT,  -- JSON array
     parent_id TEXT,
+    is_context BOOLEAN DEFAULT FALSE,  -- Flag to indicate if this is a context post
     timestamp INTEGER NOT NULL,
     signature TEXT,
     hash TEXT,
@@ -40,10 +41,20 @@ CREATE TABLE IF NOT EXISTS users (
     public_key TEXT NOT NULL,
     username TEXT UNIQUE NOT NULL,
     created_at INTEGER NOT NULL,
-    authenticity_score REAL DEFAULT 0.0,
-    reputation_score REAL DEFAULT 0.0,
-    last_active INTEGER,
-    session_data TEXT  -- JSON for session info
+    authenticity_score REAL DEFAULT 0,
+    reputation_score REAL DEFAULT 0,
+    truth_accuracy REAL DEFAULT 0,
+    evidence_quality REAL DEFAULT 0,
+    engagement_quality REAL DEFAULT 0,
+    community_score REAL DEFAULT 0,
+    last_active INTEGER NOT NULL,
+    session_data TEXT,
+    preferences TEXT,
+    stake_amount REAL DEFAULT 0,
+    stake_locked_until INTEGER,
+    domain_expertise JSON,
+    verification_level INTEGER DEFAULT 0,
+    total_contributions INTEGER DEFAULT 0
 );
 
 -- Algorithm Tables
@@ -106,14 +117,83 @@ CREATE TABLE IF NOT EXISTS evidence_chain (
     content_id TEXT NOT NULL,
     evidence_id TEXT NOT NULL,
     submitter_id TEXT NOT NULL,
-    evidence_type TEXT NOT NULL CHECK(evidence_type IN ('url', 'image', 'text')),
+    evidence_type TEXT NOT NULL CHECK(evidence_type IN ('url', 'image', 'text', 'author_context')),
     evidence_text TEXT NOT NULL,
+    references TEXT, -- JSON array of reference URLs/citations
     quality_score REAL DEFAULT 0.0 CHECK(quality_score BETWEEN 0 AND 1),
+    context_score REAL DEFAULT 0.0 CHECK(context_score BETWEEN 0 AND 1),
+    display_position TEXT DEFAULT 'standard' CHECK(display_position IN ('top', 'standard')),
     timestamp INTEGER NOT NULL,
+    last_updated INTEGER,
     verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending', 'verified', 'rejected')),
+    metadata TEXT, -- JSON for additional metadata
     PRIMARY KEY (content_id, evidence_id),
     FOREIGN KEY (content_id) REFERENCES content(id),
     FOREIGN KEY (submitter_id) REFERENCES users(id)
+);
+
+-- User Activity History
+CREATE TABLE IF NOT EXISTS user_activity (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    activity_type TEXT NOT NULL,
+    target_id TEXT,
+    timestamp INTEGER NOT NULL,
+    impact_score REAL,
+    metadata JSON,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- User Relationships
+CREATE TABLE IF NOT EXISTS user_relationships (
+    follower_id TEXT NOT NULL,
+    following_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    trust_score REAL DEFAULT 0,
+    interaction_count INTEGER DEFAULT 0,
+    last_interaction INTEGER,
+    metadata JSON,
+    PRIMARY KEY (follower_id, following_id),
+    FOREIGN KEY (follower_id) REFERENCES users(id),
+    FOREIGN KEY (following_id) REFERENCES users(id)
+);
+
+-- User Achievements
+CREATE TABLE IF NOT EXISTS user_achievements (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    achievement_type TEXT NOT NULL,
+    earned_at INTEGER NOT NULL,
+    level INTEGER DEFAULT 1,
+    progress REAL DEFAULT 0,
+    metadata JSON,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- Domain Expertise
+CREATE TABLE IF NOT EXISTS domain_expertise (
+    user_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    expertise_score REAL DEFAULT 0,
+    confidence_score REAL DEFAULT 0,
+    last_updated INTEGER NOT NULL,
+    verification_proofs JSON,
+    PRIMARY KEY (user_id, domain),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- User Verification History
+CREATE TABLE IF NOT EXISTS user_verification (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    verification_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    verified_at INTEGER,
+    verifier_id TEXT,
+    proof_data JSON,
+    metadata JSON,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (verifier_id) REFERENCES users(id)
 );
 
 -- Indices
@@ -150,4 +230,33 @@ CREATE INDEX IF NOT EXISTS idx_truth_consensus_timestamp ON truth_consensus(time
 CREATE INDEX IF NOT EXISTS idx_evidence_chain_content ON evidence_chain(content_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_chain_submitter ON evidence_chain(submitter_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_chain_status ON evidence_chain(verification_status);
+
+-- User Activity indices
+CREATE INDEX IF NOT EXISTS idx_user_activity_user_time ON user_activity(user_id, timestamp);
+
+-- User Relationships indices
+CREATE INDEX IF NOT EXISTS idx_user_relationships_follower ON user_relationships(follower_id);
+CREATE INDEX IF NOT EXISTS idx_user_relationships_following ON user_relationships(following_id);
+
+-- User Achievements indices
+CREATE INDEX IF NOT EXISTS idx_user_achievements_user ON user_achievements(user_id);
+
+-- Domain Expertise indices
+CREATE INDEX IF NOT EXISTS idx_domain_expertise_score ON domain_expertise(expertise_score);
+
+-- User Verification indices
+CREATE INDEX IF NOT EXISTS idx_user_verification_status ON user_verification(user_id, status);
+
+-- Add index for context posts
+CREATE INDEX IF NOT EXISTS idx_content_context ON content(parent_id, is_context);
+
+-- Triggers for automatic updates
+CREATE TRIGGER IF NOT EXISTS update_user_last_active
+AFTER INSERT ON user_activity
+BEGIN
+    UPDATE users 
+    SET last_active = NEW.timestamp,
+        total_contributions = total_contributions + 1
+    WHERE id = NEW.user_id;
+END;
 ``` 

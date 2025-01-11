@@ -5,72 +5,101 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/saint/babel-protocol/backend/api/models"
 )
 
-const (
-	dbFileName = "babel.db"
-	schemaFile = "schema.sql"
-)
-
-// DBManager handles database connections and operations
+// DBManager handles database operations
 type DBManager struct {
-	db   *sql.DB
-	mu   sync.RWMutex
-	path string
+	db *sql.DB
+	mu sync.Mutex
 }
 
-// NewDBManager creates a new database manager instance
-func NewDBManager(dataDir string) (*DBManager, error) {
-	// Ensure data directory exists
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create data directory: %v", err)
-	}
-
-	dbPath := filepath.Join(dataDir, dbFileName)
+// NewDBManager creates a new database manager
+func NewDBManager(dbPath string) (*DBManager, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %v", err)
+		return nil, err
 	}
 
-	// Set connection pool settings
-	db.SetMaxOpenConns(1) // SQLite only supports one writer
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
+	// Configure connection pool
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
-	manager := &DBManager{
-		db:   db,
-		path: dbPath,
-	}
-
-	// Initialize schema
-	if err := manager.initSchema(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %v", err)
-	}
-
-	return manager, nil
+	return &DBManager{
+		db: db,
+	}, nil
 }
 
-// initSchema initializes the database schema
-func (m *DBManager) initSchema() error {
-	schemaPath := filepath.Join(filepath.Dir(m.path), schemaFile)
-	schema, err := os.ReadFile(schemaPath)
+// UpdateContentBatch updates multiple content entries in a single transaction
+func (m *DBManager) UpdateContentBatch(contents []*models.Content) error {
+	tx, err := m.db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to read schema file: %v", err)
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		UPDATE content SET 
+			truth_score = ?,
+			visibility_score = ?,
+			processing_status = ?,
+			last_updated = ?,
+			topics = ?,
+			entities = ?,
+			consensus_state = ?,
+			consensus_score = ?,
+			consensus_validator_count = ?,
+			consensus_temporal_weight = ?,
+			metadata = ?
+		WHERE id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %v", err)
+	}
+	defer stmt.Close()
+
+	for _, content := range contents {
+		metadata, err := json.Marshal(content.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %v", err)
+		}
+
+		topics, err := json.Marshal(content.Topics)
+		if err != nil {
+			return fmt.Errorf("failed to marshal topics: %v", err)
+		}
+
+		entities, err := json.Marshal(content.Entities)
+		if err != nil {
+			return fmt.Errorf("failed to marshal entities: %v", err)
+		}
+
+		_, err = stmt.Exec(
+			content.TruthScore,
+			content.VisibilityScore,
+			content.ProcessingStatus,
+			content.LastUpdated.Unix(),
+			string(topics),
+			string(entities),
+			content.Consensus.State,
+			content.Consensus.Score,
+			content.Consensus.ValidatorCount,
+			content.Consensus.TemporalWeight,
+			string(metadata),
+			content.ID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update content %s: %v", content.ID, err)
+		}
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	_, err = m.db.Exec(string(schema))
-	if err != nil {
-		return fmt.Errorf("failed to execute schema: %v", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
 	return nil
@@ -164,4 +193,47 @@ func (m *DBManager) Maintenance() error {
 // Use with caution and prefer using the DBManager methods
 func (m *DBManager) GetDB() *sql.DB {
 	return m.db
+}
+
+// GetUserContexts retrieves a user's context posts since a given time
+func (m *DBManager) GetUserContexts(userID string, since time.Time) ([]*models.Content, error) {
+	rows, err := m.db.Query(`
+		SELECT id, author_id, content_type, content_text, media_urls, truth_score, 
+			   visibility_score, timestamp, last_updated, metadata, parent_id
+		FROM content 
+		WHERE author_id = ? AND content_type = 'context' AND timestamp > ?
+		ORDER BY timestamp DESC
+	`, userID, since.Unix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user contexts: %v", err)
+	}
+	defer rows.Close()
+
+	var contexts []*models.Content
+	for rows.Next() {
+		var c models.Content
+		var mediaURLsJSON, metadataJSON []byte
+		var parentID sql.NullString
+
+		err := rows.Scan(&c.ID, &c.AuthorID, &c.ContentType, &c.ContentText, &mediaURLsJSON,
+			&c.TruthScore, &c.VisibilityScore, &c.Timestamp, &c.LastUpdated, &metadataJSON, &parentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan context: %v", err)
+		}
+
+		// Unmarshal JSON fields
+		if err := json.Unmarshal(mediaURLsJSON, &c.MediaURLs); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal media URLs: %v", err)
+		}
+		if err := json.Unmarshal(metadataJSON, &c.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %v", err)
+		}
+		if parentID.Valid {
+			c.ParentID = &parentID.String
+		}
+
+		contexts = append(contexts, &c)
+	}
+
+	return contexts, nil
 }

@@ -134,3 +134,8 @@ func (c *WebSocketClient) readPump() {
 		c.hub.broadcast <- message
 	}
 }
+
+// Broadcast sends a message to all connected clients
+func (h *WebSocketHub) Broadcast(message []byte) {
+	h.broadcast <- message
+}

@@ -1,0 +1,10 @@
+# Ignore PROMPTS directory
+PROMPTS/
+prompts/
+
+# Ignore algorithm results
+algorithms/results/
+
+# Ignore report and todo files
+report.md
+todo.md 

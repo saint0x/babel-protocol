@@ -1,77 +1,129 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joho/godotenv"
 )
 
-// Config holds application configuration
+// Config holds all configuration for the application
 type Config struct {
-	Port         string `json:"port"`
-	DatabasePath string `json:"database_path"`
-	LogLevel     string `json:"log_level"`
-	Environment  string `json:"environment"`
+	Environment         string
+	ServerAddress       string
+	DatabasePath        string
+	AlgorithmServiceURL string
+	RateLimit           RateLimit
+	Redis               RedisConfig
+	JWT                 JWTConfig
 }
 
-// LoadConfig loads configuration from a JSON file
-func LoadConfig(path string) (*Config, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("error opening config file: %v", err)
-	}
-	defer file.Close()
-
-	var config Config
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&config); err != nil {
-		return nil, fmt.Errorf("error decoding config: %v", err)
-	}
-
-	if err := validateConfig(&config); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %v", err)
-	}
-
-	return &config, nil
+// RateLimit holds rate limiting configuration
+type RateLimit struct {
+	Enabled   bool
+	Requests  int
+	Window    time.Duration
+	WhiteList []string
 }
 
-// validateConfig checks if the configuration is valid
-func validateConfig(config *Config) error {
-	if config.Port == "" {
-		config.Port = "8080" // Default port
-	}
-
-	if config.DatabasePath == "" {
-		config.DatabasePath = "babel.db" // Default database path
-	}
-
-	if config.LogLevel == "" {
-		config.LogLevel = "info" // Default log level
-	}
-
-	if config.Environment == "" {
-		config.Environment = "development" // Default environment
-	}
-
-	return nil
+// RedisConfig holds Redis configuration
+type RedisConfig struct {
+	Address  string
+	Password string
+	DB       int
 }
 
-// GetEnvironment returns the current environment
-func (c *Config) GetEnvironment() string {
-	return c.Environment
+// JWTConfig holds JWT configuration
+type JWTConfig struct {
+	Secret        string
+	ExpiryMinutes int
 }
 
-// IsDevelopment checks if the current environment is development
-func (c *Config) IsDevelopment() bool {
-	return c.Environment == "development"
+// Load loads configuration from environment variables
+func Load() (*Config, error) {
+	// Load .env file if it exists
+	godotenv.Load()
+
+	cfg := &Config{
+		Environment:         getEnv("ENVIRONMENT", "development"),
+		ServerAddress:       getEnv("SERVER_ADDRESS", ":8080"),
+		DatabasePath:        getEnv("DATABASE_PATH", "babel.db"),
+		AlgorithmServiceURL: getEnv("ALGORITHM_SERVICE_URL", "http://localhost:8081"),
+		RateLimit: RateLimit{
+			Enabled:   getBoolEnv("RATE_LIMIT_ENABLED", true),
+			Requests:  getIntEnv("RATE_LIMIT_REQUESTS", 100),
+			Window:    getDurationEnv("RATE_LIMIT_WINDOW", 1*time.Minute),
+			WhiteList: getStringSliceEnv("RATE_LIMIT_WHITELIST", []string{}),
+		},
+		Redis: RedisConfig{
+			Address:  getEnv("REDIS_ADDRESS", "localhost:6379"),
+			Password: getEnv("REDIS_PASSWORD", ""),
+			DB:       getIntEnv("REDIS_DB", 0),
+		},
+		JWT: JWTConfig{
+			Secret:        getEnv("JWT_SECRET", ""),
+			ExpiryMinutes: getIntEnv("JWT_EXPIRY_MINUTES", 60),
+		},
+	}
+
+	// Validate required configuration
+	if cfg.JWT.Secret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is required")
+	}
+
+	return cfg, nil
 }
 
-// IsProduction checks if the current environment is production
-func (c *Config) IsProduction() bool {
-	return c.Environment == "production"
+// Helper functions to get environment variables with defaults
+
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
 }
 
-// IsTest checks if the current environment is test
-func (c *Config) IsTest() bool {
-	return c.Environment == "test"
+func getBoolEnv(key string, defaultValue bool) bool {
+	if value, exists := os.LookupEnv(key); exists {
+		b, err := strconv.ParseBool(value)
+		if err == nil {
+			return b
+		}
+	}
+	return defaultValue
+}
+
+func getIntEnv(key string, defaultValue int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if i, err := strconv.Atoi(value); err == nil {
+			return i
+		}
+	}
+	return defaultValue
+}
+
+func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
+	if value, exists := os.LookupEnv(key); exists {
+		if d, err := time.ParseDuration(value); err == nil {
+			return d
+		}
+	}
+	return defaultValue
+}
+
+func getStringSliceEnv(key string, defaultValue []string) []string {
+	if value, exists := os.LookupEnv(key); exists && value != "" {
+		return split(value, ",")
+	}
+	return defaultValue
+}
+
+func split(s string, sep string) []string {
+	if s == "" {
+		return []string{}
+	}
+	return strings.Split(s, sep)
 }

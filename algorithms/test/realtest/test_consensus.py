@@ -14,7 +14,7 @@ import numpy as np
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
-from algorithms.source_of_truth_consensus import SourceOfTruthConsensus
+from algorithms.consensus import SourceOfTruthConsensus
 from algorithms.test.data.db_config import TestDatabaseConfig
 
 class ConsensusTestMetrics:

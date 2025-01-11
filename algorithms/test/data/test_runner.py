@@ -36,7 +36,7 @@ from algorithms.feedback_loop_optimization import FeedbackLoopOptimizer
 from algorithms.community_moderation import CommunityModerationSystem
 from algorithms.engagement_analytics import EngagementAnalytics
 from algorithms.temporal_considerations import TemporalConsiderations
-from algorithms.source_of_truth_consensus import SourceOfTruthConsensus
+from algorithms.consensus import SourceOfTruthConsensus
 
 # Import test database configuration
 from algorithms.test.data.db_config import TestDatabaseConfig
