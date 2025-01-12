@@ -14,6 +14,7 @@ type Content struct {
 	ContentText      string                 `json:"content_text"`
 	MediaURLs        []string               `json:"media_urls"`
 	ParentID         *string                `json:"parent_id,omitempty"`
+	IsContext        bool                   `json:"is_context"`
 	Timestamp        time.Time              `json:"timestamp"`
 	Signature        string                 `json:"signature"`
 	Hash             string                 `json:"hash"`
@@ -376,4 +377,43 @@ type ConsensusInfo struct {
 	PreviousScore     float64            `json:"previous_score,omitempty"`
 	UserContributions map[string]float64 `json:"user_contributions,omitempty"`
 	TemporalWeight    float64            `json:"temporal_weight"`
+}
+
+// Comment represents a comment on content
+type Comment struct {
+	ID        string    `json:"id"`
+	ContentID string    `json:"content_id"`
+	AuthorID  string    `json:"author_id"`
+	Text      string    `json:"text"`
+	ParentID  string    `json:"parent_id,omitempty"` // For nested comments
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// DirectMessage represents a private message between users
+type DirectMessage struct {
+	ID         string    `json:"id"`
+	SenderID   string    `json:"sender_id"`
+	ReceiverID string    `json:"receiver_id"`
+	Text       string    `json:"text"`
+	Timestamp  time.Time `json:"timestamp"`
+	ReadAt     time.Time `json:"read_at,omitempty"`
+}
+
+// ConsensusUpdate represents a change in consensus state
+type ConsensusUpdate struct {
+	ContentID    string    `json:"content_id"`
+	State        string    `json:"state"` // FORMING, REACHED, CHALLENGED
+	Score        float64   `json:"score"` // Current consensus score
+	Participants int       `json:"participants"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
+// ReputationUpdate represents a change in user reputation
+type ReputationUpdate struct {
+	UserID     string    `json:"user_id"`
+	OldScore   float64   `json:"old_score"`
+	NewScore   float64   `json:"new_score"`
+	Reason     string    `json:"reason"`
+	ChangeType string    `json:"change_type"` // VOTE_ACCURACY, EVIDENCE_QUALITY, etc.
+	Timestamp  time.Time `json:"timestamp"`
 }

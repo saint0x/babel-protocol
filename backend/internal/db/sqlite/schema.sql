@@ -196,6 +196,18 @@ CREATE TABLE IF NOT EXISTS user_verification (
     FOREIGN KEY (verifier_id) REFERENCES users(id)
 );
 
+-- Direct Messages
+CREATE TABLE IF NOT EXISTS direct_messages (
+    id TEXT PRIMARY KEY,
+    sender_id TEXT NOT NULL,
+    receiver_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    read_at INTEGER,
+    FOREIGN KEY (sender_id) REFERENCES users(id),
+    FOREIGN KEY (receiver_id) REFERENCES users(id)
+);
+
 -- Indices
 
 -- Content indices
@@ -249,6 +261,11 @@ CREATE INDEX IF NOT EXISTS idx_user_verification_status ON user_verification(use
 
 -- Add index for context posts
 CREATE INDEX IF NOT EXISTS idx_content_context ON content(parent_id, is_context);
+
+-- Direct Messages indices
+CREATE INDEX IF NOT EXISTS idx_direct_messages_sender ON direct_messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_receiver ON direct_messages(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_timestamp ON direct_messages(timestamp);
 
 -- Triggers for automatic updates
 CREATE TRIGGER IF NOT EXISTS update_user_last_active

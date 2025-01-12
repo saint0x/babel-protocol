@@ -465,15 +465,31 @@ func (m *DBManager) UpdateUser(user *models.User) error {
 	return m.Transaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 			UPDATE users SET
-				authenticity_score = ?, reputation_score = ?,
-				truth_accuracy = ?, evidence_quality = ?,
-				engagement_quality = ?, community_score = ?,
-				last_active = ?, session_data = ?
+				authenticity_score = ?,
+				reputation_score = ?,
+				truth_accuracy = ?,
+				evidence_quality = ?,
+				engagement_quality = ?,
+				community_score = ?,
+				last_active = ?,
+				session_data = ?,
+				stake_amount = ?,
+				stake_locked_until = ?,
+				verification_level = ?,
+				total_contributions = ?
 			WHERE id = ?`,
-			user.AuthenticityScore, user.ReputationScore,
-			user.TruthAccuracy, user.EvidenceQuality,
-			user.EngagementQuality, user.CommunityScore,
-			user.LastActive.Unix(), sessionData,
+			user.AuthenticityScore,
+			user.ReputationScore,
+			user.TruthAccuracy,
+			user.EvidenceQuality,
+			user.EngagementQuality,
+			user.CommunityScore,
+			user.LastActive.Unix(),
+			sessionData,
+			user.StakeAmount,
+			user.StakeLockedUntil,
+			user.VerificationLevel,
+			user.TotalContributions,
 			user.ID,
 		)
 		return err
@@ -704,6 +720,21 @@ func (m *DBManager) UpdateEvidence(evidence *models.Evidence) error {
 			evidence.LastUpdated.Unix(),
 			string(metadata),
 			evidence.ID,
+		)
+		return err
+	})
+}
+
+// Direct Message Operations
+
+func (m *DBManager) CreateDirectMessage(message *models.DirectMessage) error {
+	return m.Transaction(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			INSERT INTO direct_messages (
+				id, sender_id, receiver_id, text, timestamp, read_at
+			) VALUES (?, ?, ?, ?, ?, NULL)`,
+			message.ID, message.SenderID, message.ReceiverID,
+			message.Text, message.Timestamp.Unix(),
 		)
 		return err
 	})

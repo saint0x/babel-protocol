@@ -8,3 +8,5 @@ algorithms/results/
 # Ignore report and todo files
 report.md
 todo.md 
+TODO.md
+BACKEND.md
